@@ -159,6 +159,7 @@ var ghost_mat: StandardMaterial3D = null
 const MINE_COUNT := 3
 var monster_opening := false       # 异形席：开局 4 步还没走完（由玩家自己走）
 var leap_left := 0                 # 弹跳力：整局还能跃几次
+var ai_jitter := 0                 # 被闪之后要侧移的步数（脚本异形）
 var stun_turns := 0                # 被闪光弹晃住的回合数（那回合它不能动）
 var throw_left := {"flash": 1, "nade": 1, "fire": 1}   # 投掷者：每种一颗
 var armed_throw := ""             # 已经拿起、等着点格子的那一个
@@ -1387,7 +1388,7 @@ func _flush_say() -> void:
 	if Time.get_ticks_msec() < _say_hold_until:
 		return
 	var item: Array = _say_queue.pop_front()
-	_apply_say(String(item[0]), Color(item[1]))
+	_apply_say(str(item[0]), item[1])
 	_say_hold_until = Time.get_ticks_msec() + SAY_MIN_MS
 
 
@@ -1494,6 +1495,49 @@ func _random_free_neighbor(cell: Vector2i) -> Vector2i:
 	return cell
 
 
+func _jitter_neighbor(cell: Vector2i, target: Vector2i) -> Vector2i:
+	# 被闪之后往「侧面」甩一格（不是掉头、也不是继续直走）
+	var dx := signi(target.x - cell.x)
+	var dy := signi(target.y - cell.y)
+	var side: Array = []
+	if dx != 0:
+		side.append(Vector2i(0, 1))
+		side.append(Vector2i(0, -1))
+	else:
+		side.append(Vector2i(1, 0))
+		side.append(Vector2i(-1, 0))
+	side.shuffle()
+	for d in side:
+		var nb: Vector2i = cell + d
+		if _in_bounds(nb) and not _is_mountain(nb) and nb != HUMAN_HOME:
+			return nb
+	return cell
+
+
+func _in_fire(cell: Vector2i) -> bool:
+	for f in fires:
+		if Vector2i(f["cell"]) == cell:
+			return true
+	return false
+
+
+func _neighbor_avoiding_fire(cell: Vector2i, target: Vector2i) -> Vector2i:
+	# 直走那格在烧？找一个「不在烧、又没离目标更远」的邻格
+	var best := cell
+	var best_d := 999
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nb: Vector2i = cell + d
+		if not _in_bounds(nb) or _is_mountain(nb) or nb == HUMAN_HOME:
+			continue
+		if _in_fire(nb):
+			continue
+		var dd := absi(nb.x - target.x) + absi(nb.y - target.y)
+		if dd < best_d:
+			best_d = dd
+			best = nb
+	return best
+
+
 func _monster_turn() -> void:
 	# 脚本对手：基础每回合 1 步；爆发力 = 3 步 / 停一回合；强健体魄受伤后下一回合 3 步。
 	# 会放幌子：每三次爆发有一次整轮朝着远处走，让足迹拐弯、掉头，不能顺着往回推。
@@ -1503,6 +1547,7 @@ func _monster_turn() -> void:
 		# 被闪光弹晃住：这一回合它不动，而且不算「爆发力之后的那次休息」
 		stun_turns -= 1
 		steps = 0
+		ai_jitter = 1   # 缓过来之后先侧移一格，别沿原路送上门
 	elif monster_skill == GameConfig.MonsterSkill.BURST:
 		steps = 3 if monster_phase == 0 else 0
 		monster_phase = 1 - monster_phase
@@ -1536,7 +1581,10 @@ func _monster_turn() -> void:
 	if use_decoy:
 		target = ai_decoy
 
-	for i in range(steps):
+	var walked := 0
+	var guard := 0
+	while walked < steps and guard < 14:
+		guard += 1
 		# 弹跳力：偶尔跃一格抄近路（跳过的那格不留痕迹）
 		if leap_left > 0 and randf() < 0.45:
 			var dc := _leap_dir_toward(monster_pos, target)
@@ -1546,6 +1594,7 @@ func _monster_turn() -> void:
 				leap_left -= 1
 				visited[landing] = true
 				step_taken += 1
+				walked += 1
 				path.append(landing)
 				await get_tree().create_timer(0.13).timeout
 				if monster_pos == HUMAN_HOME:
@@ -1554,18 +1603,38 @@ func _monster_turn() -> void:
 		var nxt := _bfs_next(monster_pos, target)
 		if nxt == monster_pos:
 			nxt = _random_free_neighbor(monster_pos)
+		# 被闪光弹晃过之后：先往侧面甩一格，别傻站着沿原路走
+		if ai_jitter > 0:
+			var jit := _jitter_neighbor(monster_pos, target)
+			if jit != monster_pos:
+				nxt = jit
+			ai_jitter -= 1
+		# 还在烧的格子不去踩（它知道那儿烫）
+		elif _in_fire(nxt):
+			var alt := _neighbor_avoiding_fire(monster_pos, target)
+			if alt != monster_pos:
+				nxt = alt
 		if nxt == monster_pos:
 			break
+		var smashed := false
 		if obstacle_set.has(nxt):
 			# 它不绕墙，直接把墙撞开 —— 声音会传到你这边
 			_smash_obstacle(nxt)
 			_wall_crash(nxt)
+			smashed = true
 			await get_tree().create_timer(0.20).timeout
 		monster_pos = nxt
 		visited[monster_pos] = true
 		step_taken += 1
 		path.append(monster_pos)
+		# 撞墙不花步数：撞开之后顺势穿过去，不会停在被撞破那一格上挨查
+		if smashed:
+			await get_tree().create_timer(0.13).timeout
+			if monster_pos == HUMAN_HOME:
+				break
+			continue
 		await get_tree().create_timer(0.13).timeout
+		walked += 1
 		if monster_pos == HUMAN_HOME:
 			break
 
@@ -2291,6 +2360,8 @@ func _end_monster_turn() -> void:
 		return
 	player_turn = false
 	monster_steps = 0
+	if not GameConfig.is_online():
+		_pf_advance()      # 你这一回合走完了：脚本人类的粒子群往前推一步
 	if GameConfig.is_online():
 		if monster_opening:
 			# 联机：开局那 4 步走完 —— 不计回合计，直接把台子交给人类
@@ -2386,6 +2457,7 @@ func _scripted_human_probe() -> void:
 	_spawn_result_mark(pick, res)
 	_mark_human_probe(pick, res)
 	human_marks.append({"cell": pick, "result": res, "round": round_no})
+	_pf_observe(pick, res)
 
 	match res:
 		0:
@@ -2425,23 +2497,17 @@ func _dist_map(from: Vector2i) -> Dictionary:
 
 
 func _pick_human_probe() -> Vector2i:
-	# 脚本人类「会推理」：三层信息 ——
-	#   ①它从 (9,9) 出发、现在第 R 回合，大概走了 4 + 1.5R 步 → 优先查那一圈
-	#   ②已知脚印是硬约束（第 r 回合踩的格子，现在离它不超过 3*(R-r) 步）
-	#   ③越靠近我家越值得查
-	var known: Array = []
-	for m in human_marks:
-		if int(m["result"]) == 1:
-			known.append(m)
-	var dspawn := _dist_map(MONSTER_SPAWN)
-	var dhome := _dist_map(HUMAN_HOME)
-	var shortest: int = int(dspawn.get(HUMAN_HOME, 18))
-	# 心跳是合法线索：它离我越近，心跳越快越响。用这个粗信号反推「它大概在离我几步的地方」。
-	var pulse := absi(monster_pos.x - HUMAN_HOME.x) + absi(monster_pos.y - HUMAN_HOME.y)
-	var expected := 4.0 + 1.5 * float(round_no)
-	if pulse <= 6:
-		# 已经到门口了：按心跳估它还剩几步，就查那一圈
-		expected = float(shortest) - float(pulse)
+	# 脚本人类「会推理」：粒子滤波 —— 撒一批「它可能在哪儿 + 它可能是什么技能」的猜测，
+	# 每次探查结果用来杀粒子，剩下的粒子密度就是「它在哪」的概率图。
+	if not _pf_ready:
+		_pf_init()
+	if _pf.is_empty():
+		_pf_reseed()
+	var cnt := {}
+	for pt in _pf:
+		var pp: Vector2i = pt["p"]
+		cnt[pp] = int(cnt.get(pp, 0)) + 1
+	var total := float(maxi(_pf.size(), 1))
 	var best := Vector2i(-1, -1)
 	var best_score := -1e18
 	for x in range(SIZE):
@@ -2449,31 +2515,137 @@ func _pick_human_probe() -> Vector2i:
 			var c := Vector2i(x, y)
 			if not _probe_ok(c) or _already_probed(c):
 				continue
-			var ok := true
-			for m in known:
-				var f: Vector2i = m["cell"]
-				var dt: int = round_no - int(m["round"])
-				if absi(c.x - f.x) + absi(c.y - f.y) > 3 * dt + 1:
-					ok = false
-					break
-			if not ok:
-				continue
-			var ds: float = float(dspawn.get(c, 99))
-			var dh: float = float(dhome.get(c, 99))
-			# ①它现在最可能待的那一圈
-			var score := -2.2 * absf(ds - expected)
-			# ②在我家到出生点的「必经走廊」上更值得查（它得往门里走，绕路很亏）
-			if int(ds) + int(dh) <= shortest + 2:
-				score += 1.1
-			if known.size() > 0:
-				var nf: Vector2i = known[known.size() - 1]["cell"]
-				score -= 0.9 * float(absi(c.x - nf.x) + absi(c.y - nf.y))
-			# ③同样近的情况下，靠近我家那侧更可能（它一直在往门里走）
-			score -= 0.30 * dh
+			var hit := float(cnt.get(c, 0)) / total
+			var pg := clampf(hit, 0.002, 0.998)
+			# 信息量：概率 0.5 的格子「查了最有用」，概率 0 的格子查了纯浪费
+			var info := -(pg * log(pg) + (1.0 - pg) * log(1.0 - pg))
+			var score := 7.0 * hit + 1.35 * info
+			score -= 0.01 * float(absi(c.x - HUMAN_HOME.x) + absi(c.y - HUMAN_HOME.y))
 			if score > best_score:
 				best_score = score
 				best = c
 	return best
+
+
+const PF_N := 420
+var _pf: Array = []
+var _pf_ready := false
+var _pf_rng := RandomNumberGenerator.new()
+
+
+func _pf_init() -> void:
+	_pf_rng.seed = 20261105
+	_pf.clear()
+	for i in range(PF_N):
+		var sk := _pf_rng.randi_range(1, 4)
+		var p: Vector2i = MONSTER_SPAWN
+		var passed := {p: round_no}
+		for k in range(HEAD_START_STEPS):
+			p = _pf_one_turn(p, sk, 0, passed)
+			passed[p] = true
+		_pf.append({"p": p, "sk": sk, "ph": 0, "pass": passed})
+	_pf_ready = true
+
+
+func _pf_reseed() -> void:
+	var seed_cell: Vector2i = MONSTER_SPAWN
+	for i in range(human_marks.size() - 1, -1, -1):
+		if int(human_marks[i]["result"]) == 1:
+			seed_cell = human_marks[i]["cell"]
+			break
+	_pf.clear()
+	for i in range(PF_N):
+		var sk := _pf_rng.randi_range(1, 4)
+		var passed := {seed_cell: round_no}
+		_pf.append({"p": seed_cell, "sk": sk, "ph": _pf_rng.randi_range(0, 1), "pass": passed})
+
+
+func _pf_one_turn(from: Vector2i, sk: int, ph: int, passed: Dictionary) -> Vector2i:
+	# 一个「异形回合」里它可能怎么走 —— 按四种技能各自的步数规则
+	var steps := 1
+	if sk == 2:
+		steps = 3 if ph == 0 else 0
+	elif sk == 4:
+		steps = 3 if round_no >= 15 else (2 if round_no >= 7 else 1)
+	var p := from
+	for s in range(steps):
+		var dirs: Array = []
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var nb: Vector2i = p + d
+			if _in_bounds(nb) and not _is_mountain(nb):
+				dirs.append(d)
+		if dirs.is_empty():
+			break
+		var choice: Vector2i = dirs[0]
+		if _pf_rng.randf() < 0.82:
+			var best_d := 999
+			for d in dirs:
+				var nb2: Vector2i = p + d
+				var dd := absi(nb2.x - HUMAN_HOME.x) + absi(nb2.y - HUMAN_HOME.y)
+				if dd < best_d:
+					best_d = dd
+					choice = d
+		else:
+			choice = dirs[_pf_rng.randi_range(0, dirs.size() - 1)]
+		var mult := 2 if (sk == 3 and _pf_rng.randf() < 0.45) else 1
+		var dest: Vector2i = p + choice * mult
+		if not _in_bounds(dest) or _is_mountain(dest):
+			dest = p + choice
+		if not _in_bounds(dest) or _is_mountain(dest):
+			break
+		p = dest
+		passed[p] = round_no
+	return p
+
+
+func _pf_observe(cell: Vector2i, res: int) -> void:
+	# 用这一次探查的结果当「似然」来杀粒子。
+	# 关键：脚印留 10 回合（TRACE_LIFE=9），所以 res==0 不只说明「它不在这格」，
+	# 还说明「它这 10 回合里从没走过这格」—— 这一条才真正能把粒子砍下去。
+	if not _pf_ready:
+		return
+	var keep: Array = []
+	for pt in _pf:
+		var p: Vector2i = pt["p"]
+		var passed: Dictionary = pt["pass"]
+		var stepped := passed.has(cell) and (round_no - int(passed[cell]) <= TRACE_LIFE)
+		if res == 2:
+			if p == cell:
+				keep.append(pt)
+			continue
+		if p == cell:
+			continue            # 它真在这儿的话，结果就该是 2
+		if res == 1:
+			if stepped:
+				keep.append(pt)
+			elif _pf_rng.randf() < 0.06:
+				keep.append(pt)   # 留极少数「它绕了、但脚印是别处的」的余地
+			continue
+		if stepped:
+			continue            # 查过是空的 → 它的路径里不可能有这格
+		keep.append(pt)
+	_pf = keep
+	if _pf.size() < 40:
+		# 模型偏了（粒子快被杀光）：保留幸存者，再从这次查到的位置补一批
+		var extra := PF_N - _pf.size()
+		for i in range(extra):
+			var sk := _pf_rng.randi_range(1, 4)
+			_pf.append({"p": cell, "sk": sk, "ph": _pf_rng.randi_range(0, 1), "pass": {cell: round_no}})
+
+
+func _pf_advance() -> void:
+	# 它这一回合动完了：所有粒子按各自的技能假设往前推一步
+	if not _pf_ready or _pf.is_empty():
+		return
+	for pt in _pf:
+		var ph: int = pt["ph"]
+		pt["p"] = _pf_one_turn(pt["p"], int(pt["sk"]), ph, pt["pass"])
+		if int(pt["sk"]) == 2:
+			pt["ph"] = 1 - ph
+	while _pf.size() > PF_N:
+		_pf.pop_back()
+	while _pf.size() < PF_N and _pf.size() > 0:
+		_pf.append(_pf[_pf_rng.randi_range(0, _pf.size() - 1)].duplicate(true))
 
 
 func _detonate_ai(c: Vector2i) -> void:
@@ -2842,16 +3014,20 @@ func _spawn_wall(c: Vector2i) -> void:
 
 
 func _smash_obstacle(c: Vector2i) -> void:
-	# 塌的是「这一格」，不是整组 —— 同组另一格还立着，也还能被撞
-	obstacle_set.erase(c)
+	# 撞穿的是「这道墙」—— 一组两格一起塌，否则会剩半截立在那儿，
+	# 看着像没撞开（早先逐格塌就是为了修幽灵墙，现在整组一起拆同样不会有幽灵墙）
+	var doomed: Array = [c]
 	for i in range(obstacles.size()):
 		var g: Array = obstacles[i]
 		if g.has(c):
-			g.erase(c)
-			if g.is_empty():
-				obstacles.remove_at(i)
+			for gc in g:
+				if not doomed.has(gc):
+					doomed.append(gc)
+			obstacles.remove_at(i)
 			break
-	_free_wall_at(c)
+	for dc in doomed:
+		obstacle_set.erase(dc)
+		_free_wall_at(dc)
 	_refresh_hud()
 
 
