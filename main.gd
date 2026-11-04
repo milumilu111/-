@@ -1616,23 +1616,15 @@ func _monster_turn() -> void:
 				nxt = alt
 		if nxt == monster_pos:
 			break
-		var smashed := false
 		if obstacle_set.has(nxt):
 			# 它不绕墙，直接把墙撞开 —— 声音会传到你这边
 			_smash_obstacle(nxt)
 			_wall_crash(nxt)
-			smashed = true
 			await get_tree().create_timer(0.20).timeout
 		monster_pos = nxt
 		visited[monster_pos] = true
 		step_taken += 1
 		path.append(monster_pos)
-		# 撞墙不花步数：撞开之后顺势穿过去，不会停在被撞破那一格上挨查
-		if smashed:
-			await get_tree().create_timer(0.13).timeout
-			if monster_pos == HUMAN_HOME:
-				break
-			continue
 		await get_tree().create_timer(0.13).timeout
 		walked += 1
 		if monster_pos == HUMAN_HOME:
@@ -3014,20 +3006,16 @@ func _spawn_wall(c: Vector2i) -> void:
 
 
 func _smash_obstacle(c: Vector2i) -> void:
-	# 撞穿的是「这道墙」—— 一组两格一起塌，否则会剩半截立在那儿，
-	# 看着像没撞开（早先逐格塌就是为了修幽灵墙，现在整组一起拆同样不会有幽灵墙）
-	var doomed: Array = [c]
+	# 只撞碎被撞的那一格；同一组的另一格还立着（要撞才碎）
+	obstacle_set.erase(c)
+	_free_wall_at(c)
 	for i in range(obstacles.size()):
 		var g: Array = obstacles[i]
 		if g.has(c):
-			for gc in g:
-				if not doomed.has(gc):
-					doomed.append(gc)
-			obstacles.remove_at(i)
+			g.erase(c)
+			if g.is_empty():
+				obstacles.remove_at(i)
 			break
-	for dc in doomed:
-		obstacle_set.erase(dc)
-		_free_wall_at(dc)
 	_refresh_hud()
 
 
