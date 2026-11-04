@@ -18,6 +18,9 @@ static var net_mode: int = 0
 # 这一局的地形种子：0 = 还没定（main.gd 会随机一个）。联机时房主定，随开局消息发给客机。
 static var map_seed: int = 0
 
+# 再来一局：结算页按 R 时置 true，菜单看到它就不重置联机状态、直接回「选阵营」
+static var rematch: bool = false
+
 
 static func reset() -> void:
 	player_side = Side.HUMAN
@@ -25,6 +28,7 @@ static func reset() -> void:
 	monster_skill = MonsterSkill.BURST
 	net_mode = 0
 	map_seed = 0
+	rematch = false
 
 
 static func is_online() -> bool:

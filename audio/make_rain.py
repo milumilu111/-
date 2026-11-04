@@ -50,6 +50,29 @@ def droplet(n: int, at_sec: float, level: float) -> np.ndarray:
     return out
 
 
+def glass_tap(n: int, at_sec: float, level: float) -> np.ndarray:
+    """一滴打在玻璃上：比"打在窗台"更脆、更高、更短，尾音带一点点玻璃的余振。"""
+    dur = rng.uniform(0.03, 0.075)
+    m = int(dur * SR)
+    t = np.arange(m) / SR
+    env = np.exp(-t * rng.uniform(90.0, 160.0))
+    env *= np.clip(t / 0.0008, 0.0, 1.0)
+    # 一声很短的"嘀"：两个靠近的高频正弦 + 一点窄带噪声
+    f1 = rng.uniform(2600.0, 4600.0)
+    f2 = f1 * rng.uniform(1.52, 1.61)
+    body = np.sin(2.0 * np.pi * f1 * t) * 0.55
+    body += np.sin(2.0 * np.pi * f2 * t) * 0.22
+    body += shaped_noise(m, 0.15, 9000.0, 2400.0) * 0.30
+    # 玻璃余振：更轻、更长一点
+    ring = np.sin(2.0 * np.pi * f1 * t) * np.exp(-t * 26.0) * 0.10
+    out = np.zeros(n)
+    s = int(at_sec * SR)
+    e = min(s + m, n)
+    seg = ((body + ring) * env * level)[: e - s]
+    out[s:e] = seg
+    return out
+
+
 def build() -> np.ndarray:
     n = int((SECONDS + TAIL) * SR)
 
@@ -63,12 +86,17 @@ def build() -> np.ndarray:
     muffled = shaped_noise(n, 1.10, 700.0, 120.0) * 0.26
     muffled *= 0.85 + 0.15 * slow_lfo(n, 0.021, 2.1)
 
-    # 3) 很清楚的那几滴
+    # 3) 很清楚的那几滴（打在窗台上，闷一点）
     drops = np.zeros(n)
     for _ in range(26):
         drops += droplet(n, rng.uniform(0.0, SECONDS + TAIL), rng.uniform(0.05, 0.14))
 
-    mix = hiss + muffled + drops
+    # 3b) 打在玻璃上的脆响：稀疏、很轻，但听得出来
+    taps = np.zeros(n)
+    for _ in range(14):
+        taps += glass_tap(n, rng.uniform(0.0, SECONDS + TAIL), rng.uniform(0.10, 0.22))
+
+    mix = hiss + muffled + drops + taps
 
     # 4) 循环：尾部与头部交叉淡化
     body = mix[: int(SECONDS * SR)].copy()

@@ -34,7 +34,11 @@ var relay_check: CheckBox
 
 
 func _ready() -> void:
-	GameConfig.reset()
+	# 「再来一局」时不能 reset：联机状态和房间连接要留着
+	var rematch := GameConfig.rematch
+	GameConfig.rematch = false
+	if not rematch:
+		GameConfig.reset()
 	online_mode = false
 	var bg := ColorRect.new()
 	bg.color = Color(0.014, 0.015, 0.021)
@@ -59,8 +63,26 @@ func _ready() -> void:
 	net.message.connect(_on_net_message)
 	net.net_error.connect(_on_net_error)
 
-	_show_page(0)
+	if rematch:
+		_enter_rematch()
+	else:
+		_show_page(0)
 	_start_bgm()
+
+
+func _enter_rematch() -> void:
+	# 回到「选阵营」：技能和地形都要重挑，房间连接不动
+	online_mode = GameConfig.is_online()
+	roles_sent = false
+	GameConfig.human_skill = 0
+	GameConfig.monster_skill = 0
+	GameConfig.map_seed = 0
+	my_skill = 0
+	peer_skill = 0
+	guest_ready = false
+	_show_page(1)
+	if GameConfig.is_guest():
+		_set_status("房主想再来一局 —— 等他挑边。")
 
 
 func _start_bgm() -> void:
@@ -205,10 +227,19 @@ func _build_side() -> void:
 
 	_label("两边是同一张桌子的对面。换座位不换局面。", 17, Color(0.34, 0.33, 0.30), Vector2(162, 470), 900)
 
+	if GameConfig.is_online() and GameConfig.is_guest():
+		# 客机不能挑边，得等房主 —— 不说明的话，两边都点不动会像卡住
+		_label("对面正在挑边 —— 他选完，你就自动进下一步。", 18, Color(0.60, 0.52, 0.55), Vector2(162, 520), 900)
+		side_btn_a.disabled = true
+		side_btn_b.disabled = true
+
 	_button("返 回", Vector2(162, 760), 200, 54, func(): _show_page(0))
 
 
 func _set_side(s: int) -> void:
+	# 联机时只有房主挑边，客机等 roles
+	if GameConfig.is_online() and GameConfig.is_guest():
+		return
 	chosen_side = s
 	GameConfig.player_side = s
 	if online_mode and GameConfig.is_host() and not roles_sent:
@@ -471,6 +502,9 @@ func _on_net_message(data: Dictionary) -> void:
 		"bye":
 			if status_label != null:
 				_set_status("对手走了。")
+		"rematch":
+			# 对面想再来一局：房主主动按 R 时客机收到，客机按 R 时房主收到
+			_enter_rematch()
 
 
 func _lock_skill_buttons() -> void:

@@ -81,6 +81,7 @@ var result_float_t := 0.0          # 底部那句话的浮动相位
 
 var world_env: Environment         # 捏在手里：输的时候要把它一起压暗
 var pendant_root: Node3D
+var ceiling_node: MeshInstance3D
 var bulb_mat: StandardMaterial3D   # 灯泡的自发光材质（灭灯时归零）
 var next_lamp_flicker_at := 0.0    # 吊灯下一次自己闪的时间
 
@@ -452,6 +453,9 @@ func _build_walls(root: Node3D) -> void:
 		mi.position = sp[1]
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
+		if sp[0].y < 1.0:
+			# 顶板要单独记着：俯视时相机在它上面，得把它藏起来才看得见桌子
+			ceiling_node = mi
 
 
 func _build_window(root: Node3D, wz: float, cx: float) -> void:
@@ -1119,7 +1123,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					if setup_phase and side == 0:
 						setup_vertical = not setup_vertical
 					elif ended:
-						_back_to_menu()
+						_rematch()
 				KEY_M:
 					# M 静音/恢复底噪（不想听的时候随手关掉）
 					var muted := bgm != null and bgm.volume_db > -40.0
@@ -1131,11 +1135,25 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _toggle_top_down() -> void:
 	top_down = not top_down
+	# 俯视时把吊灯和天花板藏起来 —— 灯罩悬在棋盘正上方，顶板又在相机上头
+	if pendant_root != null:
+		pendant_root.visible = not top_down
+	if ceiling_node != null:
+		ceiling_node.visible = not top_down
 	if top_down:
 		look_target_yaw = 0.0
 		look_target_pitch = -89.0
 	else:
 		look_target_pitch = -38.0
+
+
+func _rematch() -> void:
+	# 再来一局：回「选阵营」重挑。联机时顺带通知对面，连接不断（不然还得重新输房间号）
+	var n := _net()
+	if n != null and n.is_online():
+		n.send_msg({"t": "rematch"})
+	GameConfig.rematch = true
+	get_tree().change_scene_to_file("res://menu.tscn")
 
 
 func _back_to_menu() -> void:
@@ -3450,6 +3468,11 @@ func _on_peer_left() -> void:
 
 func _on_net_msg(d: Dictionary) -> void:
 	var t := String(d.get("t", ""))
+	if t == "rematch":
+		# 对面按了「再来一局」：我也跟着回选阵营（还在这局里也要跟过去）
+		GameConfig.rematch = true
+		get_tree().change_scene_to_file("res://menu.tscn")
+		return
 	if t == "snap":
 		if GameConfig.is_guest():
 			_apply_snapshot(d)
