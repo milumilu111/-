@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────
+#  异形入侵 · 文案表
+# ─────────────────────────────────────────────────────────────
+#  怎么改：改等号右边引号里的字，保存，重开游戏就生效。
+#  · 不用加引号，也不用管缩进。等号右边整行都是文案。
+#  · 「#」开头的行是注释，删掉也不影响。
+#  · 带 %s 的行是占位符（会把名字填进去），别把 %s 删了。
+#  · 想恢复默认：把这一行整行删掉，或者行首加个 # 注释掉。
+#  · 改坏了也不要紧：读不出来的行会被忽略，游戏用默认文案。
+# ─────────────────────────────────────────────────────────────
+
+# ── 探查结果（人类按左键查一格之后，屏幕底部那句话）──
+res_empty = 这儿什么都没有。真乖 ，亲爱的—— 继续猜。
+res_trail = 它踩过这里。可惜，它不在这。
+res_hit = 那是它。运气不错，宝贝，你捡回了一条命。
+hit_wounded = 擦到了。它流了点东西，跑得更快了。
+probe_wait = 递上去了。等那边的回音。
+wall_crash = 墙塌了。它过去了 —— 那一声你听见了吧，宝贝？
+
+# ── 布防 / 开局 ──
+setup_ask = 布置你的防御，你也不想就这么被撕成碎片吧？
+setup_done_sp = 布防完了。它先走 4 步 —— 不计回合，你也看不见。
+setup_done_wait = 布防完了。等他走开局的 4 步 —— 不计回合，你看不见。
+setup_done_host = 布防完了。轮到他先走 4 步 —— 不计回合，你看不见。
+opening_hint = 它先走了 4 步 —— 不计回合，你也看不见。
+
+# ── 地雷 ──
+mine_hit = BOOM！正中目标，但是他没死。听见它愤怒的嘶吼了吗？
+mine_miss = BOOM！但是什么也没有。你害怕了对吗？
+
+# ── 投掷 ──
+throw_empty = 这颗已经用掉了。别抠空盒子。
+throw_arm = %s在手上。点一格，扔出去（Esc 放下）。
+throw_cant = 那儿扔不了。
+throw_done = 扔出去了。
+flash_hit = 晃到了。九格里有东西，它现在睁不开眼。
+flash_miss = 亮了。九格干净得像新的一样。
+nade_placed = 放下了。祈祷下回合它在里面吧。
+fire_placed = 烧起来了。这一定很烫脚吧。
+put_down = 放下了。
+
+# ── 回合流转（异形席）──
+auto_end = 你的步数走完了。
+rest_confirm = 这一回合你动不了。按空格，休息。
+
+# ── 座位 / 联机 ──
+seat_human_here = 你现在坐在他的对面。他查哪一格，你都看得见。
+seat_wait_deploy = 他正在布防。布完轮到你，走 4 步。
+seat_opening = 你在出生点。我很好奇，开局 4 步你会怎么走？
+setup_done_monster = 他布完防了。开局这 4 步归你自己 —— 走完按空格。
+guest_wait = 等房主开局……
+turn_other = 轮到它了。祈祷吧。
+turn_you = 轮到你了。手别抖。
+turn_multi = 轮到你了 —— 这回合能查 %d 格。
+actions_more = 还能再查 %d 次。
+turn_you_monster = 轮到你了。走给我看。
+peer_left = 对面断开了。
+peer_left_end = 他走了。
+press_r = 按 R 回标题
+
+# ── 结算：人类赢 ──
+win_probe_title = 是个美好的开始，不是吗？
+win_probe_sub = 那下一次呢？
+win_mine_title = 看你放的烟花。
+win_mine_sub = 混杂着它的血肉。
+win_fire_title = 烧掉了。
+win_fire_sub = 它一直没从火光里走出来。
+win_nade_title = 炸中了。
+win_nade_sub = 你只是把九格都试了一遍。
+win_timeout_title = 天亮了。
+win_timeout_sub = 二十回合，它没能进门。
+
+# ── 结算：人类输 ──
+lose_arrive_title = 它到了。
+lose_arrive_sub = 下一次再努力吧，那么，再见了。
+
+# ── 结算：异形席 ──
+m_arrive_title = 你到了。
+m_arrive_sub = 这点血肉无法满足你，你渴求更多。
+m_timeout_title = 天亮了。
+m_timeout_sub = 阳光灼烧着你，你无法在动弹分毫。
+m_probe_title = 他找到你了。
+m_probe_sub = 在密集的轰炸下，你只能变为血肉。
+m_mine_title = 踩雷了。
+m_mine_sub = 运气真差。失去双腿的你，还能找到他吗？
+m_fire_title = 你被烧死了。
+m_fire_sub = 烤异形？那是种什么味道？
+m_nade_title = 你被炸死了。
+m_nade_sub = 为什么不躲开呢。
+m_other_title = 这条是什么
+m_other_sub = 灯亮在他那边。

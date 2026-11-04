@@ -1,0 +1,14 @@
+{
+  "name": "alien-invasion-relay",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Relay server for 异形入侵 1v1: pairs two players by room code and forwards JSON.",
+  "main": "relay.mjs",
+  "scripts": {
+    "start": "node relay.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

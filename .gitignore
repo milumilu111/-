@@ -1,0 +1,57 @@
+# ── Godot 引擎缓存（必排除，几百 MB 且每个版本都不一样）
+.godot/
+*.tmpdir/
+.config.gd.*.tmpdir/
+
+# ── 导出产物（安装包/可执行文件走 GitHub Releases，不走 git）
+异形入侵*.exe
+*.exe
+*.pck
+*.zip
+build/
+dist/
+
+# ── 依赖与日志
+server/node_modules/
+*.log
+relay.log
+relay.err.log
+
+# ── 系统垃圾
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ── 我（AI）生成的过程截图：不是美术资源，别进仓库
+#    想留封面图就建一个 docs/ 目录放进去，然后在下面加一行 !docs/
+deliver_*.png
+shot*.png
+eyes*.png
+ghost_*.png
+look*.png
+menu[0-9].png
+net_*.png
+monster_*.png
+reveal*.png
+setup[0-9].png
+skill*.png
+survivor*.png
+throw_*.png
+thrower1.png
+turn_you.png
+v[0-9]_*.png
+walls1.png
+wall_half.png
+leap1.png
+nade1.png
+guest*.png
+map_rand*.png
+predator7.png
+peer_left*.png
+lose_human_fixed.png
+tmp_*.png
+x.png
+
+# ── docs/ 里放精选截图（上面那些规则会误伤，这里再放出来）
+!docs/
+!docs/*.png
