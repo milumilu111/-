@@ -89,7 +89,9 @@ var audio_step: AudioStreamPlayer
 var audio_hit: AudioStreamPlayer
 var audio_heart: AudioStreamPlayer
 var bgm: AudioStreamPlayer
+var rain: AudioStreamPlayer
 const BGM_DB := -9.0
+const RAIN_DB := -17.0
 
 var monster_phase := 0             # 0 = 这一回合走 3 步，1 = 这一回合不动
 var actions_left := 1              # 人类这一回合还能行动几次（求生者会 >1）
@@ -300,10 +302,10 @@ func _build_environment() -> void:
 	add_child(lamp)
 
 	var cold := OmniLight3D.new()
-	cold.position = Vector3(-2.6, 1.4, -2.2)
+	cold.position = Vector3(-1.6, 0.9, -1.1)
 	cold.light_color = Color(0.26, 0.40, 0.72)
-	cold.light_energy = 0.40
-	cold.omni_range = 5.0
+	cold.light_energy = 0.30
+	cold.omni_range = 1.5
 	add_child(cold)
 
 	# 顶部软补光：把桌面上远离吊灯的地方垫起来，避免角落吃掉棋盘
@@ -329,12 +331,12 @@ func _build_pendant() -> void:
 	var cord_mesh := CylinderMesh.new()
 	cord_mesh.top_radius = 0.006
 	cord_mesh.bottom_radius = 0.006
-	cord_mesh.height = 1.70
+	cord_mesh.height = 2.80
 	cord_mesh.radial_segments = 8
 	var cord := MeshInstance3D.new()
 	cord.mesh = cord_mesh
 	cord.material_override = metal
-	cord.position = Vector3(0.0, 2.05, 0.0)
+	cord.position = Vector3(0.0, 2.50, 0.0)
 	pendant_root.add_child(cord)
 
 	var shade_mesh := CylinderMesh.new()
@@ -432,13 +434,14 @@ func _build_walls(root: Node3D) -> void:
 	# 四面墙只是"这间屋子存在"的证据：几乎全黑，只在边缘露出一点形。
 	# 墙要够高 —— 高到从画面里看不见墙顶，才有"在屋里"的压迫感。
 	var wall_mat := _room_mat(Color(0.055, 0.056, 0.062), 1.0)
-	var wh := 3.2
-	var yc := 1.0
+	var wh := 5.0
+	var yc := 1.4
 	var specs := [
 		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, -2.80)],   # 人类席正对
 		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, 2.80)],    # 异形席正对
 		[Vector3(0.10, wh, 9.0), Vector3(-4.20, yc, 0.0)],   # 左
 		[Vector3(0.10, wh, 9.0), Vector3(4.20, yc, 0.0)],    # 右
+		[Vector3(9.0, 0.10, 9.0), Vector3(0.0, 3.90, 0.0)],  # 顶：抬头只看到天花板，不看到缝
 	]
 	for sp in specs:
 		var mi := MeshInstance3D.new()
@@ -859,16 +862,15 @@ func _build_audio() -> void:
 		audio_heart.stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
 		audio_heart.play()
 	_build_bgm()
+	_build_rain()
 
 
-func _build_bgm() -> void:
-	# 房间底噪：没有拍点、没有旋律，只是一间屋子该有的声音。
-	# 循环点靠素材上的首尾交叉淡化藏起来，听不出「又从头开始」。
-	var stream := load("res://audio/bgm_room_dark.wav") as AudioStreamWAV
+func _loop_wav(path: String) -> AudioStreamWAV:
+	var stream := load(path) as AudioStreamWAV
 	if stream == null:
-		return
+		return null
 	# 让它自己循环（样本级无缝）。只有 PCM 才能这样算帧数；被导入成 QOA 时
-	# 帧数算不出来，就靠下面的 finished 回调接上去。
+	# 帧数算不出来，就靠调用处的 finished 回调接上去。
 	var bytes_per_sample := 0
 	match stream.format:
 		AudioStreamWAV.FORMAT_8_BITS:
@@ -880,6 +882,33 @@ func _build_bgm() -> void:
 		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
 		stream.loop_begin = 0
 		stream.loop_end = frames
+	return stream
+
+
+func _build_rain() -> void:
+	# 窗外的雨：极轻，只是"外面在下雨"这件事被听见。
+	var stream := _loop_wav("res://audio/rain_soft.wav")
+	if stream == null:
+		return
+	rain = AudioStreamPlayer.new()
+	rain.stream = stream
+	rain.volume_db = RAIN_DB
+	add_child(rain)
+	rain.finished.connect(_on_rain_finished)
+	rain.play()
+
+
+func _on_rain_finished() -> void:
+	if rain != null:
+		rain.play()
+
+
+func _build_bgm() -> void:
+	# 房间底噪：没有拍点、没有旋律，只是一间屋子该有的声音。
+	# 循环点靠素材上的首尾交叉淡化藏起来，听不出「又从头开始」。
+	var stream := _loop_wav("res://audio/bgm_room_dark.wav")
+	if stream == null:
+		return
 	bgm = AudioStreamPlayer.new()
 	bgm.stream = stream
 	bgm.volume_db = BGM_DB
@@ -1093,8 +1122,11 @@ func _unhandled_input(event: InputEvent) -> void:
 						_back_to_menu()
 				KEY_M:
 					# M 静音/恢复底噪（不想听的时候随手关掉）
+					var muted := bgm != null and bgm.volume_db > -40.0
 					if bgm != null:
-						bgm.volume_db = -80.0 if bgm.volume_db > -40.0 else BGM_DB
+						bgm.volume_db = -80.0 if muted else BGM_DB
+					if rain != null:
+						rain.volume_db = -80.0 if muted else RAIN_DB
 
 
 func _toggle_top_down() -> void:
