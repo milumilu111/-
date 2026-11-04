@@ -7,6 +7,8 @@
 
 引擎：**Godot 4.7**（`config/features = 4.7`），全部场景与美术由代码程序化生成，无外部美术资源。
 
+![标题](docs/menu.png)
+
 ![对局](docs/look6_human.png)
 
 ## 玩法
