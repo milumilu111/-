@@ -57,6 +57,12 @@ var look_target_pitch := -42.0
 var looking := false
 var top_down := false
 
+# 镜头手感：呼吸（几乎看不见的慢晃）+ 震动（撞墙、爆炸时）
+var dust: GPUParticles3D
+var breath_t := 0.0
+var shake := 0.0
+var shake_rng := RandomNumberGenerator.new()
+
 var hud_round: Label
 var hud_round_big: Label
 var hud_round_pre: Label
@@ -175,6 +181,7 @@ func _ready() -> void:
 	_build_room()
 	_build_board()
 	_build_camera()
+	_build_dust()
 	_build_hud()
 	_build_audio()
 	_build_eyes()
@@ -476,6 +483,45 @@ func _build_camera() -> void:
 	add_child(camera)
 
 
+func _build_dust() -> void:
+	# 光束里的灰：只在灯照到的那块上空飘，慢慢上升、慢慢横移。
+	# 这是「坐在这儿」唯一的证据 —— 除了你，这里还有东西在动。
+	dust = GPUParticles3D.new()
+	dust.amount = 70
+	dust.lifetime = 14.0
+	dust.preprocess = 3.0
+	dust.position = Vector3(0.0, 0.30, 0.0)
+	dust.visibility_aabb = AABB(Vector3(-1.5, -0.5, -1.5), Vector3(3.0, 1.4, 3.0))
+
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(0.95, 0.20, 0.95)
+	pm.direction = Vector3(0.0, 1.0, 0.0)
+	pm.spread = 70.0
+	pm.initial_velocity_min = 0.006
+	pm.initial_velocity_max = 0.030
+	pm.gravity = Vector3(0.0006, 0.004, 0.0)
+	pm.turbulence_enabled = true
+	pm.turbulence_noise_strength = 0.16
+	pm.turbulence_noise_scale = 1.1
+	pm.scale_min = 0.5
+	pm.scale_max = 1.4
+	pm.color = Color(1.0, 0.94, 0.82, 0.32)
+	dust.process_material = pm
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.008, 0.008)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.95, 0.85, 0.16)
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	mat.disable_receive_shadows = true
+	quad.material = mat
+	dust.draw_pass_1 = quad
+	add_child(dust)
+
+
 func _build_hud() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
@@ -643,6 +689,20 @@ func _make_audio(path: String, db: float) -> AudioStreamPlayer:
 	p.volume_db = db
 	add_child(p)
 	return p
+
+
+func _fx_sound(pitch: float, db: float) -> void:
+	# 一次性的"手感音"：放东西、按按钮、扔出去。用同一个撞击样本变调，
+	# 每次开一个新的 player，这样连点时声音能叠起来而不是互相打断。
+	if audio_hit == null or audio_hit.stream == null:
+		return
+	var p := AudioStreamPlayer.new()
+	p.stream = audio_hit.stream
+	p.pitch_scale = pitch
+	p.volume_db = db
+	add_child(p)
+	p.finished.connect(p.queue_free)
+	p.play()
 
 
 # ---------------------------------------------------------------- 坐标
@@ -852,8 +912,8 @@ func _process(delta: float) -> void:
 		cam_pos = cam_pos.lerp(Vector3(0.0, 4.30, 0.02), speed)
 	else:
 		cam_pos = cam_pos.lerp(Vector3(0.0, 2.40, seat_z), speed)
-	camera.position = cam_pos
-	camera.rotation_degrees = Vector3(cam_pitch, base_yaw + cam_yaw, 0.0)
+	camera.position = cam_pos + _camera_jitter(delta)
+	camera.rotation_degrees = Vector3(cam_pitch + _breath(0.22, 0.37), base_yaw + cam_yaw + _breath(0.30, 0.23), _breath(0.34, 0.19))
 
 	_tick_ambient(delta)
 	_tick_eyes(delta)
@@ -866,8 +926,29 @@ func _process(delta: float) -> void:
 	_update_ghost()
 
 
-func _tick_scan_watchdog() -> void:
-	# 保险：scanning 一旦漏成 true，输入会被永久锁死。超过 4 秒没解开就强制放开。
+func _breath(amp_deg: float, speed: float) -> float:
+	# 呼吸：两个不成整数比的正弦叠在一起，看不出周期，只觉得"在动"
+	return (sin(breath_t * speed) * 0.62 + sin(breath_t * speed * 1.73 + 1.1) * 0.38) * amp_deg
+
+
+func _camera_jitter(delta: float) -> Vector3:
+	breath_t += delta
+	if shake <= 0.0:
+		return Vector3(0.0, sin(breath_t * 0.51) * 0.004, 0.0)
+	shake = maxf(0.0, shake - delta * 2.6)
+	var a := shake * shake * 0.055
+	return Vector3(
+		shake_rng.randf_range(-a, a),
+		sin(breath_t * 0.51) * 0.004 + shake_rng.randf_range(-a, a),
+		shake_rng.randf_range(-a, a)
+	)
+
+
+func _add_shake(amount: float) -> void:
+	shake = minf(1.4, shake + amount)
+
+
+func _tick_scan_watchdog() -> void:	# 保险：scanning 一旦漏成 true，输入会被永久锁死。超过 4 秒没解开就强制放开。
 	if not scanning:
 		_scan_since = 0
 		return
@@ -2332,6 +2413,7 @@ func _setup_place_cell(cell: Vector2i) -> void:
 		mine_list.append(cell)
 		_spawn_mine(cell)
 	setup_placed += 1
+	_fx_sound(1.52, -13.0)
 	_refresh_hud()
 	if setup_placed >= _setup_total():
 		_finish_setup()
@@ -2425,6 +2507,7 @@ func _smash_obstacle(c: Vector2i) -> void:
 func _wall_crash(cell: Vector2i) -> void:
 	# 声音从墙塌的那一格传过来（3D 定位：人类坐左上角，左右能分辨）
 	_play_wall_sound(cell)
+	_add_shake(0.55)
 	if side == 0:
 		_say(Texts.s("wall_crash"))
 		hud_result.add_theme_color_override("font_color", PINK)
@@ -2492,6 +2575,7 @@ func _detonate(c: Vector2i) -> void:
 	# 引爆：花掉人类这次行动
 	scanning = true
 	player_turn = false
+	_fx_sound(0.68, -2.0)
 	_play(audio_hit)
 	var hit := _cheb(c, monster_pos) <= 1
 	mine_list.erase(c)
@@ -2671,6 +2755,7 @@ func _do_throw(kind: String, cell: Vector2i) -> void:
 	scanning = true
 	player_turn = false
 	throw_left[kind] = int(throw_left.get(kind, 1)) - 1
+	_fx_sound(1.05, -10.0)
 	match kind:
 		"flash":
 			_play(audio_hit)
@@ -2714,6 +2799,7 @@ func _screen_flash(col: Color = Color(1.0, 1.0, 1.0), a: float = 0.8) -> void:
 
 
 func _spawn_blast(cell: Vector2i, col: Color, size: float) -> void:
+	_add_shake(1.0 * size)
 	var root := Node3D.new()
 	root.position = _cell_pos(cell) + Vector3(0.0, 0.045, 0.0)
 	board_root.add_child(root)
