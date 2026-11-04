@@ -144,6 +144,7 @@ var _last_steps_seen := 0
 var _auto_end_pending := false
 var _scan_since := 0
 var _say_hold_until := 0
+var _say_queue: Array = []   # 等最短停留的那几条（FIFO），元素 [txt, col]
 var _say_pending := ""
 var _say_pending_col := PINK_SOFT
 var end_reason := ""
@@ -1357,8 +1358,11 @@ func _say(txt: String, col: Color = PINK_SOFT, force: bool = false) -> void:
 		return
 	var now := Time.get_ticks_msec()
 	if not force and now < _say_hold_until and hud_result.text != "" and txt != hud_result.text:
-		_say_pending = txt
-		_say_pending_col = col
+		# 排队（不是覆盖）：一回合里「闪光弹的结果」和「轮到你了」可能前后脚到，
+		# 覆盖掉的话玩家就永远看不到前一条了
+		_say_queue.append([txt, col])
+		if _say_queue.size() > 4:
+			_say_queue.pop_front()
 		return
 	_apply_say(txt, col)
 	_say_hold_until = now + SAY_MIN_MS
@@ -1373,19 +1377,17 @@ func _apply_say(txt: String, col: Color) -> void:
 
 
 func _flush_say() -> void:
-	# 排队里的那条，等够最短停留就放出来
-	if _say_pending == "":
+	# 排队里的那条，等够最短停留就放出来（先进先出，一条都不会被吞）
+	if _say_queue.is_empty():
 		return
 	if ended:
-		# 终局了：排队里那条（多半是「轮到你了」）不许再弹出来盖掉结算文案
-		_say_pending = ""
+		# 终局了：排队里那些（多半是「轮到你了」）不许再弹出来盖掉结算文案
+		_say_queue.clear()
 		return
 	if Time.get_ticks_msec() < _say_hold_until:
 		return
-	var t := _say_pending
-	var c := _say_pending_col
-	_say_pending = ""
-	_apply_say(t, c)
+	var item: Array = _say_queue.pop_front()
+	_apply_say(String(item[0]), Color(item[1]))
 	_say_hold_until = Time.get_ticks_msec() + SAY_MIN_MS
 
 
@@ -1916,8 +1918,14 @@ func _finish(title: String, sub: String, color: Color, reason: String = "") -> v
 	scanning = false
 	player_turn = false
 	setup_phase = false
+	_say_queue.clear()
 	_say_pending = ""
 	end_reason = reason
+	# 结算揭底：让对面看见「他到底带了什么」—— 这是这局最后一次情报交换
+	if side == GameConfig.Side.HUMAN:
+		sub = sub + "\n" + "它带的是 —— %s。" % GameConfig.monster_skill_name()
+	else:
+		sub = sub + "\n" + "他带的是 —— %s。" % GameConfig.human_skill_name()
 	end_title = title
 	end_sub = sub
 	hud_end.visible = true
@@ -2390,8 +2398,14 @@ func _scripted_human_probe() -> void:
 
 	if res == 2:
 		await get_tree().create_timer(0.6).timeout
-		_play(audio_hit)
-		_finish(Texts.s("m_probe_title"), Texts.s("m_probe_sub"), Color(0.85, 0.35, 0.30), "PROBE")
+		# 必须走 _damage_monster()：强健体魄有两条命，不能一发就死
+		if _damage_monster():
+			_play(audio_hit)
+			_finish(Texts.s("m_probe_title"), Texts.s("m_probe_sub"), Color(0.85, 0.35, 0.30), "PROBE")
+		else:
+			_play(audio_hit)
+			_add_shake(0.8)
+			_notify("第 %d 回合 · 他查中你了 —— 你挨了一下，但还在。" % round_no)
 
 
 func _dist_map(from: Vector2i) -> Dictionary:
@@ -2477,6 +2491,9 @@ func _detonate_ai(c: Vector2i) -> void:
 func _walk_damage_ai() -> void:
 	if _damage_monster():
 		_finish(Texts.s("m_mine_title"), Texts.s("m_mine_sub"), Color(0.85, 0.35, 0.30), "MINE")
+	else:
+		# 强健体魄：炸中了但没倒 —— 玩家得知道这一下没白打，也知道它还有一口气
+		_notify("第 %d 回合 · 雷炸开了 —— 它晃了一下，还站着。" % round_no)
 
 
 
