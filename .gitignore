@@ -61,3 +61,5 @@ _*.py
 *.before-*
 *.bak
 *.orig
+
+docs/*.import
