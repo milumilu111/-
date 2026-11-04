@@ -31,7 +31,7 @@ const PINK_SOFT := Color(0.98, 0.62, 0.78)
 const PINK := Color(1.00, 0.45, 0.66)
 const PINK_HOT := Color(1.00, 0.28, 0.48)
 const RESULT_Y := 844.0
-const SAY_MIN_MS := 1000
+const SAY_MIN_MS := 2000
 const RESULT_Y_END := 766.0
 const RESULT_FLOAT_AMP := 4.5
 const RESULT_FLOAT_SPEED := 1.9
@@ -1512,7 +1512,11 @@ func _monster_turn() -> void:
 
 	var dist := absi(monster_pos.x - HUMAN_HOME.x) + absi(monster_pos.y - HUMAN_HOME.y)
 	var use_decoy := false
-	if steps > 0:
+	# 幌子是拿来骗「会顺着脚印推」的人的。对面要是在乱摸（探查点离我很远），
+	# 放幌子纯属自己拖时间 —— 这时候一路直扑，20 回合内一定进得去。
+	var hot := _human_threat_level()
+	var endgame := round_no >= MAX_ROUNDS - 4
+	if steps > 0 and not endgame and hot >= 0.34:
 		burst_index += 1
 		if ai_decoy_bursts > 0:
 			use_decoy = true
@@ -1587,6 +1591,21 @@ func _monster_turn() -> void:
 	else:
 		_say(Texts.s("turn_you"))
 	_survivor_notice()
+
+
+func _human_threat_level() -> float:
+	# 他最近几次探查离我有多近：全在我周围 = 1（他在贴着我找），全在很远 = 0（他在乱摸）
+	var hot := 0
+	var n := 0
+	for i in range(human_marks.size() - 1, -1, -1):
+		if n >= 4:
+			break
+		var m: Dictionary = human_marks[i]
+		var c: Vector2i = m["cell"]
+		n += 1
+		if absi(c.x - monster_pos.x) + absi(c.y - monster_pos.y) <= 4:
+			hot += 1
+	return float(hot) / float(maxi(1, n))
 
 
 func _bfs_next(from: Vector2i, target: Vector2i) -> Vector2i:
@@ -2334,29 +2353,14 @@ func _scripted_human_probe() -> void:
 		if _cheb(m, monster_pos) <= 1:
 			await _detonate_ai(m)
 			return
-	var pick := Vector2i(-1, -1)
-	# 一、见过脚印，就沿着「它正朝我这边走」的方向推一格
-	for i in range(human_marks.size() - 1, -1, -1):
-		var m: Dictionary = human_marks[i]
-		if int(m["result"]) == 1:
-			var g := _guess_next(m["cell"])
-			if _probe_ok(g) and not _already_probed(g):
-				pick = g
-				break
-	# 二、没线索：翻最新的一片脚印（六成），或者到处摸（四成）
-	if pick.x < 0 and randf() < 0.62:
-		var keys := visited.keys()
-		for i in range(keys.size() - 1, -1, -1):
-			var c: Vector2i = keys[i]
-			if c != monster_pos and not _already_probed(c):
-				pick = c
-				break
+	var pick := _pick_human_probe()
+	# 兜底：实在没地方可查，随便摸一格
 	if pick.x < 0:
 		for i in range(60):
-			var c := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
-			if not _probe_ok(c) or _already_probed(c):
+			var c0 := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
+			if not _probe_ok(c0) or _already_probed(c0):
 				continue
-			pick = c
+			pick = c0
 			break
 	if pick.x < 0:
 		return
@@ -2388,6 +2392,74 @@ func _scripted_human_probe() -> void:
 		await get_tree().create_timer(0.6).timeout
 		_play(audio_hit)
 		_finish(Texts.s("m_probe_title"), Texts.s("m_probe_sub"), Color(0.85, 0.35, 0.30), "PROBE")
+
+
+func _dist_map(from: Vector2i) -> Dictionary:
+	# 从 from 出发的 BFS 步数图（山和墙都不算路障：墙它是撞开走过去）
+	var dist := {from: 0}
+	var queue: Array[Vector2i] = [from]
+	while queue.size() > 0:
+		var cur: Vector2i = queue.pop_front()
+		var d0: int = dist[cur]
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var nb: Vector2i = cur + d
+			if not _in_bounds(nb) or _is_mountain(nb) or dist.has(nb):
+				continue
+			dist[nb] = d0 + 1
+			queue.append(nb)
+	return dist
+
+
+func _pick_human_probe() -> Vector2i:
+	# 脚本人类「会推理」：三层信息 ——
+	#   ①它从 (9,9) 出发、现在第 R 回合，大概走了 4 + 1.5R 步 → 优先查那一圈
+	#   ②已知脚印是硬约束（第 r 回合踩的格子，现在离它不超过 3*(R-r) 步）
+	#   ③越靠近我家越值得查
+	var known: Array = []
+	for m in human_marks:
+		if int(m["result"]) == 1:
+			known.append(m)
+	var dspawn := _dist_map(MONSTER_SPAWN)
+	var dhome := _dist_map(HUMAN_HOME)
+	var shortest: int = int(dspawn.get(HUMAN_HOME, 18))
+	# 心跳是合法线索：它离我越近，心跳越快越响。用这个粗信号反推「它大概在离我几步的地方」。
+	var pulse := absi(monster_pos.x - HUMAN_HOME.x) + absi(monster_pos.y - HUMAN_HOME.y)
+	var expected := 4.0 + 1.5 * float(round_no)
+	if pulse <= 6:
+		# 已经到门口了：按心跳估它还剩几步，就查那一圈
+		expected = float(shortest) - float(pulse)
+	var best := Vector2i(-1, -1)
+	var best_score := -1e18
+	for x in range(SIZE):
+		for y in range(SIZE):
+			var c := Vector2i(x, y)
+			if not _probe_ok(c) or _already_probed(c):
+				continue
+			var ok := true
+			for m in known:
+				var f: Vector2i = m["cell"]
+				var dt: int = round_no - int(m["round"])
+				if absi(c.x - f.x) + absi(c.y - f.y) > 3 * dt + 1:
+					ok = false
+					break
+			if not ok:
+				continue
+			var ds: float = float(dspawn.get(c, 99))
+			var dh: float = float(dhome.get(c, 99))
+			# ①它现在最可能待的那一圈
+			var score := -2.2 * absf(ds - expected)
+			# ②在我家到出生点的「必经走廊」上更值得查（它得往门里走，绕路很亏）
+			if int(ds) + int(dh) <= shortest + 2:
+				score += 1.1
+			if known.size() > 0:
+				var nf: Vector2i = known[known.size() - 1]["cell"]
+				score -= 0.9 * float(absi(c.x - nf.x) + absi(c.y - nf.y))
+			# ③同样近的情况下，靠近我家那侧更可能（它一直在往门里走）
+			score -= 0.30 * dh
+			if score > best_score:
+				best_score = score
+				best = c
+	return best
 
 
 func _detonate_ai(c: Vector2i) -> void:
