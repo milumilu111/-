@@ -51,9 +51,9 @@ var ended := false
 var camera: Camera3D
 var cam_pos := Vector3(0.0, 2.40, 2.60)
 var cam_yaw := 0.0
-var cam_pitch := -42.0
+var cam_pitch := -38.0
 var look_target_yaw := 0.0
-var look_target_pitch := -42.0
+var look_target_pitch := -38.0
 var looking := false
 var top_down := false
 
@@ -413,9 +413,11 @@ func _build_room() -> void:
 		root.add_child(leg)
 
 	_build_walls(root)
-	_build_window(root)
+	_build_window(root, -2.74, 1.95)
+	_build_window(root, 2.74, -1.95)
 	_build_door(root)
-	_build_clock(root)
+	_build_clock(root, -2.72, -2.35)
+	_build_clock(root, 2.72, 2.35)
 
 
 func _room_mat(col: Color, rough: float) -> StandardMaterial3D:
@@ -427,12 +429,16 @@ func _room_mat(col: Color, rough: float) -> StandardMaterial3D:
 
 
 func _build_walls(root: Node3D) -> void:
-	# 四面墙只是"这间屋子存在"的证据：不在灯里，几乎全黑，只在边缘露出一点形。
+	# 四面墙只是"这间屋子存在"的证据：几乎全黑，只在边缘露出一点形。
+	# 墙要够高 —— 高到从画面里看不见墙顶，才有"在屋里"的压迫感。
 	var wall_mat := _room_mat(Color(0.055, 0.056, 0.062), 1.0)
+	var wh := 3.2
+	var yc := 1.0
 	var specs := [
-		[Vector3(9.0, 2.6, 0.10), Vector3(0.0, 0.35, -2.95)],   # 对面（正对视角）
-		[Vector3(0.10, 2.6, 9.0), Vector3(-4.20, 0.35, 0.0)],   # 左
-		[Vector3(0.10, 2.6, 9.0), Vector3(4.20, 0.35, 0.0)],    # 右
+		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, -2.80)],   # 人类席正对
+		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, 2.80)],    # 异形席正对
+		[Vector3(0.10, wh, 9.0), Vector3(-4.20, yc, 0.0)],   # 左
+		[Vector3(0.10, wh, 9.0), Vector3(4.20, yc, 0.0)],    # 右
 	]
 	for sp in specs:
 		var mi := MeshInstance3D.new()
@@ -445,9 +451,9 @@ func _build_walls(root: Node3D) -> void:
 		root.add_child(mi)
 
 
-func _build_window(root: Node3D) -> void:
-	# 对面墙上的窗：外面永远是夜，光只是冷的、很淡的一点。
-	# 窗框 + 竖直栏杆 + 玻璃后面的"夜"（一块自发光平面）
+func _build_window(root: Node3D, wz: float, cx: float) -> void:
+	# 墙上那扇窗：外面永远是夜。窗洞很高 —— 高到上沿被画面切掉，
+	# 这样"墙很高"不是靠说的，是靠它出画。
 	var frame_mat := _room_mat(Color(0.075, 0.072, 0.068), 0.95)
 	var glass_mat := StandardMaterial3D.new()
 	glass_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -456,27 +462,26 @@ func _build_window(root: Node3D) -> void:
 	glass_mat.emission = Color(0.10, 0.16, 0.28)
 	glass_mat.emission_energy_multiplier = 0.42
 
-	var cx := 2.05
-	var cy := 0.10
-	var w := 1.70
-	var h := 0.80
-	var z := -2.88
+	var cy := 0.62
+	var w := 1.90
+	var h := 1.35
+	var inward := 0.05 if wz < 0.0 else -0.05
 
 	var glass := MeshInstance3D.new()
 	var gm := BoxMesh.new()
 	gm.size = Vector3(w, h, 0.02)
 	glass.mesh = gm
 	glass.material_override = glass_mat
-	glass.position = Vector3(cx, cy, z)
+	glass.position = Vector3(cx, cy, wz)
 	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(glass)
 
 	# 四边窗框
 	var fr := [
-		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy + h * 0.5 + 0.03, z + 0.01)],
-		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy - h * 0.5 - 0.03, z + 0.01)],
-		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx - w * 0.5 - 0.03, cy, z + 0.01)],
-		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx + w * 0.5 + 0.03, cy, z + 0.01)],
+		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy + h * 0.5 + 0.03, wz + inward)],
+		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy - h * 0.5 - 0.03, wz + inward)],
+		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx - w * 0.5 - 0.03, cy, wz + inward)],
+		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx + w * 0.5 + 0.03, cy, wz + inward)],
 	]
 	for f in fr:
 		var mi := MeshInstance3D.new()
@@ -494,31 +499,31 @@ func _build_window(root: Node3D) -> void:
 		bm.size = Vector3(0.025, h, 0.03)
 		mi.mesh = bm
 		mi.material_override = frame_mat
-		mi.position = Vector3(cx - w * 0.5 + w * (i + 1) / 4.0, cy, z + 0.015)
+		mi.position = Vector3(cx - w * 0.5 + w * (i + 1) / 4.0, cy, wz + inward)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		root.add_child(mi)
 
-	# 雨：窗外面往下掉的细线。只在窗后那一条带子里，别的地方看不见。
+	# 雨：贴玻璃、只落在窗洞里那一条竖带子上（窗框外不落）。
 	var rain := GPUParticles3D.new()
-	rain.amount = 130
-	rain.lifetime = 0.42
+	rain.amount = 150
+	rain.lifetime = 0.50
 	rain.preprocess = 1.0
-	rain.position = Vector3(cx, cy + 0.36, z + 0.05)
-	rain.visibility_aabb = AABB(Vector3(-w, -h, -0.6), Vector3(w * 2.0, h * 2.0, 1.2))
+	rain.position = Vector3(cx, cy + h * 0.5 - 0.03, wz + inward)
+	rain.visibility_aabb = AABB(Vector3(-w, -h, -0.5), Vector3(w * 2.0, h * 2.0, 1.0))
 	var pm := ParticleProcessMaterial.new()
 	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-	pm.emission_box_extents = Vector3(w * 0.5, 0.04, 0.10)
+	pm.emission_box_extents = Vector3(w * 0.5 - 0.05, 0.03, 0.02)
 	pm.direction = Vector3(0.0, -1.0, 0.0)
-	pm.spread = 2.0
-	pm.initial_velocity_min = 0.8
-	pm.initial_velocity_max = 1.3
-	pm.gravity = Vector3(0.0, -4.2, 0.0)
+	pm.spread = 1.5
+	pm.initial_velocity_min = 0.9
+	pm.initial_velocity_max = 1.2
+	pm.gravity = Vector3(0.0, -4.4, 0.0)
 	pm.scale_min = 0.7
 	pm.scale_max = 1.3
 	pm.color = Color(0.62, 0.72, 0.92, 0.30)
 	rain.process_material = pm
 	var streak := QuadMesh.new()
-	streak.size = Vector2(0.006, 0.16)
+	streak.size = Vector2(0.006, 0.15)
 	var smat := StandardMaterial3D.new()
 	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -533,11 +538,11 @@ func _build_door(root: Node3D) -> void:
 	# 左边的门：关着。门缝下有一条很细的光 —— 走廊还亮着。
 	var door_mat := _room_mat(Color(0.085, 0.072, 0.060), 0.92)
 	var dm := BoxMesh.new()
-	dm.size = Vector3(0.06, 1.95, 0.92)
+	dm.size = Vector3(0.06, 2.30, 1.00)
 	var door := MeshInstance3D.new()
 	door.mesh = dm
 	door.material_override = door_mat
-	door.position = Vector3(-4.12, 0.02, -1.15)
+	door.position = Vector3(-4.12, 0.20, -2.10)
 	door.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(door)
 
@@ -552,7 +557,7 @@ func _build_door(root: Node3D) -> void:
 	gm.size = Vector3(0.03, 0.022, 0.92)
 	gap.mesh = gm
 	gap.material_override = gap_mat
-	gap.position = Vector3(-4.09, -0.94, -1.15)
+	gap.position = Vector3(-4.09, -0.94, -2.10)
 	gap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(gap)
 
@@ -563,22 +568,23 @@ func _build_door(root: Node3D) -> void:
 	km.height = 0.07
 	knob.mesh = km
 	knob.material_override = _room_mat(Color(0.32, 0.26, 0.16), 0.45)
-	knob.position = Vector3(-4.06, -0.10, -0.80)
+	knob.position = Vector3(-4.06, -0.10, -1.75)
 	knob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(knob)
 
 
-func _build_clock(root: Node3D) -> void:
+func _build_clock(root: Node3D, z: float, x: float) -> void:
 	# 墙上的挂钟：表面几乎看不见，只有指针的暗影。二十回合走完，它就是"天亮"的另一种说法。
+	var dir := 1.0 if z < 0.0 else -1.0
 	var clock_root := Node3D.new()
 	clock_root.name = "Clock"
-	clock_root.position = Vector3(-2.45, 0.05, -2.86)
+	clock_root.position = Vector3(x, 0.30, z)
 	root.add_child(clock_root)
 
 	var face := MeshInstance3D.new()
 	var fm := CylinderMesh.new()
-	fm.top_radius = 0.20
-	fm.bottom_radius = 0.20
+	fm.top_radius = 0.22
+	fm.bottom_radius = 0.22
 	fm.height = 0.02
 	fm.radial_segments = 24
 	face.mesh = fm
@@ -587,13 +593,16 @@ func _build_clock(root: Node3D) -> void:
 	face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	clock_root.add_child(face)
 
-	clock_minute = _clock_hand(clock_root, 0.115, 0.006)
-	clock_hour = _clock_hand(clock_root, 0.075, 0.008)
+	var minute := _clock_hand(clock_root, 0.125, 0.006, dir)
+	var hour := _clock_hand(clock_root, 0.082, 0.008, dir)
+	if z < 0.0:
+		clock_minute = minute
+		clock_hour = hour
 
 
-func _clock_hand(root: Node3D, length: float, thick: float) -> Node3D:
+func _clock_hand(root: Node3D, length: float, thick: float, dir: float) -> Node3D:
 	var pivot := Node3D.new()
-	pivot.position = Vector3(0.0, 0.0, 0.014)
+	pivot.position = Vector3(0.0, 0.0, 0.014 * dir)
 	root.add_child(pivot)
 	var hand := MeshInstance3D.new()
 	var bm := BoxMesh.new()
@@ -680,7 +689,7 @@ func _add_box(pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
 
 func _build_camera() -> void:
 	camera = Camera3D.new()
-	camera.fov = 45.0
+	camera.fov = 52.0
 	camera.position = cam_pos
 	camera.rotation_degrees = Vector3(cam_pitch, cam_yaw, 0.0)
 	camera.current = true
@@ -1094,7 +1103,7 @@ func _toggle_top_down() -> void:
 		look_target_yaw = 0.0
 		look_target_pitch = -89.0
 	else:
-		look_target_pitch = -42.0
+		look_target_pitch = -38.0
 
 
 func _back_to_menu() -> void:
