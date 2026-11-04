@@ -62,6 +62,8 @@ var dust: GPUParticles3D
 var breath_t := 0.0
 var shake := 0.0
 var shake_rng := RandomNumberGenerator.new()
+var clock_minute: Node3D
+var clock_hour: Node3D
 
 var hud_round: Label
 var hud_round_big: Label
@@ -409,6 +411,208 @@ func _build_room() -> void:
 		var sz := -1.35 if i < 2 else 1.35
 		leg.position = Vector3(sx, -0.5, sz)
 		root.add_child(leg)
+
+	_build_walls(root)
+	_build_window(root)
+	_build_door(root)
+	_build_clock(root)
+
+
+func _room_mat(col: Color, rough: float) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.roughness = rough
+	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	return m
+
+
+func _build_walls(root: Node3D) -> void:
+	# 四面墙只是"这间屋子存在"的证据：不在灯里，几乎全黑，只在边缘露出一点形。
+	var wall_mat := _room_mat(Color(0.055, 0.056, 0.062), 1.0)
+	var specs := [
+		[Vector3(9.0, 2.6, 0.10), Vector3(0.0, 0.35, -2.95)],   # 对面（正对视角）
+		[Vector3(0.10, 2.6, 9.0), Vector3(-4.20, 0.35, 0.0)],   # 左
+		[Vector3(0.10, 2.6, 9.0), Vector3(4.20, 0.35, 0.0)],    # 右
+	]
+	for sp in specs:
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = sp[0]
+		mi.mesh = bm
+		mi.material_override = wall_mat
+		mi.position = sp[1]
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+
+
+func _build_window(root: Node3D) -> void:
+	# 对面墙上的窗：外面永远是夜，光只是冷的、很淡的一点。
+	# 窗框 + 竖直栏杆 + 玻璃后面的"夜"（一块自发光平面）
+	var frame_mat := _room_mat(Color(0.075, 0.072, 0.068), 0.95)
+	var glass_mat := StandardMaterial3D.new()
+	glass_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	glass_mat.albedo_color = Color(0.05, 0.075, 0.125)
+	glass_mat.emission_enabled = true
+	glass_mat.emission = Color(0.10, 0.16, 0.28)
+	glass_mat.emission_energy_multiplier = 0.42
+
+	var cx := 2.05
+	var cy := 0.10
+	var w := 1.70
+	var h := 0.80
+	var z := -2.88
+
+	var glass := MeshInstance3D.new()
+	var gm := BoxMesh.new()
+	gm.size = Vector3(w, h, 0.02)
+	glass.mesh = gm
+	glass.material_override = glass_mat
+	glass.position = Vector3(cx, cy, z)
+	glass.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(glass)
+
+	# 四边窗框
+	var fr := [
+		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy + h * 0.5 + 0.03, z + 0.01)],
+		[Vector3(w + 0.10, 0.06, 0.05), Vector3(cx, cy - h * 0.5 - 0.03, z + 0.01)],
+		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx - w * 0.5 - 0.03, cy, z + 0.01)],
+		[Vector3(0.06, h + 0.10, 0.05), Vector3(cx + w * 0.5 + 0.03, cy, z + 0.01)],
+	]
+	for f in fr:
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = f[0]
+		mi.mesh = bm
+		mi.material_override = frame_mat
+		mi.position = f[1]
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+	# 三根竖栏杆
+	for i in range(3):
+		var mi := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.025, h, 0.03)
+		mi.mesh = bm
+		mi.material_override = frame_mat
+		mi.position = Vector3(cx - w * 0.5 + w * (i + 1) / 4.0, cy, z + 0.015)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		root.add_child(mi)
+
+	# 雨：窗外面往下掉的细线。只在窗后那一条带子里，别的地方看不见。
+	var rain := GPUParticles3D.new()
+	rain.amount = 130
+	rain.lifetime = 0.42
+	rain.preprocess = 1.0
+	rain.position = Vector3(cx, cy + 0.36, z + 0.05)
+	rain.visibility_aabb = AABB(Vector3(-w, -h, -0.6), Vector3(w * 2.0, h * 2.0, 1.2))
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	pm.emission_box_extents = Vector3(w * 0.5, 0.04, 0.10)
+	pm.direction = Vector3(0.0, -1.0, 0.0)
+	pm.spread = 2.0
+	pm.initial_velocity_min = 0.8
+	pm.initial_velocity_max = 1.3
+	pm.gravity = Vector3(0.0, -4.2, 0.0)
+	pm.scale_min = 0.7
+	pm.scale_max = 1.3
+	pm.color = Color(0.62, 0.72, 0.92, 0.30)
+	rain.process_material = pm
+	var streak := QuadMesh.new()
+	streak.size = Vector2(0.006, 0.16)
+	var smat := StandardMaterial3D.new()
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smat.albedo_color = Color(0.66, 0.76, 0.96, 0.32)
+	smat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	streak.material = smat
+	rain.draw_pass_1 = streak
+	root.add_child(rain)
+
+
+func _build_door(root: Node3D) -> void:
+	# 左边的门：关着。门缝下有一条很细的光 —— 走廊还亮着。
+	var door_mat := _room_mat(Color(0.085, 0.072, 0.060), 0.92)
+	var dm := BoxMesh.new()
+	dm.size = Vector3(0.06, 1.95, 0.92)
+	var door := MeshInstance3D.new()
+	door.mesh = dm
+	door.material_override = door_mat
+	door.position = Vector3(-4.12, 0.02, -1.15)
+	door.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(door)
+
+	var gap_mat := StandardMaterial3D.new()
+	gap_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gap_mat.albedo_color = Color(0.92, 0.74, 0.42)
+	gap_mat.emission_enabled = true
+	gap_mat.emission = Color(0.95, 0.70, 0.36)
+	gap_mat.emission_energy_multiplier = 1.1
+	var gap := MeshInstance3D.new()
+	var gm := BoxMesh.new()
+	gm.size = Vector3(0.03, 0.022, 0.92)
+	gap.mesh = gm
+	gap.material_override = gap_mat
+	gap.position = Vector3(-4.09, -0.94, -1.15)
+	gap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(gap)
+
+	# 门把手
+	var knob := MeshInstance3D.new()
+	var km := SphereMesh.new()
+	km.radius = 0.035
+	km.height = 0.07
+	knob.mesh = km
+	knob.material_override = _room_mat(Color(0.32, 0.26, 0.16), 0.45)
+	knob.position = Vector3(-4.06, -0.10, -0.80)
+	knob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(knob)
+
+
+func _build_clock(root: Node3D) -> void:
+	# 墙上的挂钟：表面几乎看不见，只有指针的暗影。二十回合走完，它就是"天亮"的另一种说法。
+	var clock_root := Node3D.new()
+	clock_root.name = "Clock"
+	clock_root.position = Vector3(-2.45, 0.05, -2.86)
+	root.add_child(clock_root)
+
+	var face := MeshInstance3D.new()
+	var fm := CylinderMesh.new()
+	fm.top_radius = 0.20
+	fm.bottom_radius = 0.20
+	fm.height = 0.02
+	fm.radial_segments = 24
+	face.mesh = fm
+	face.material_override = _room_mat(Color(0.13, 0.125, 0.12), 0.9)
+	face.rotation_degrees = Vector3(90.0, 0.0, 0.0)
+	face.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	clock_root.add_child(face)
+
+	clock_minute = _clock_hand(clock_root, 0.115, 0.006)
+	clock_hour = _clock_hand(clock_root, 0.075, 0.008)
+
+
+func _clock_hand(root: Node3D, length: float, thick: float) -> Node3D:
+	var pivot := Node3D.new()
+	pivot.position = Vector3(0.0, 0.0, 0.014)
+	root.add_child(pivot)
+	var hand := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(thick, length, 0.006)
+	hand.mesh = bm
+	hand.material_override = _room_mat(Color(0.42, 0.40, 0.37), 0.55)
+	hand.position = Vector3(0.0, length * 0.5, 0.0)
+	hand.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	pivot.add_child(hand)
+	return pivot
+
+
+func _tick_clock() -> void:
+	# 20 回合 = 一夜。分针走满一圈，时针走一格。
+	if clock_minute == null or clock_hour == null:
+		return
+	var t := float(mini(round_no, MAX_ROUNDS))
+	clock_minute.rotation_degrees.z = -t * (360.0 / float(MAX_ROUNDS))
+	clock_hour.rotation_degrees.z = -t * (30.0 / float(MAX_ROUNDS))
 
 
 func _build_board() -> void:
@@ -918,6 +1122,7 @@ func _process(delta: float) -> void:
 	_tick_ambient(delta)
 	_tick_eyes(delta)
 	_tick_lamp()
+	_tick_clock()
 	_tick_result_float(delta)
 	_tick_auto_end()
 	_tick_scan_watchdog()
@@ -2498,10 +2703,15 @@ func _smash_obstacle(c: Vector2i) -> void:
 			if g.is_empty():
 				obstacles.remove_at(i)
 			break
+	_free_wall_at(c)
+	_refresh_hud()
+
+
+func _free_wall_at(c: Vector2i) -> void:
+	# 只把「这一格的模型」拆掉，别动别的
 	for ch in gear_root.get_children():
 		if ch is MeshInstance3D and ch.position.distance_to(_cell_pos(c) + Vector3(0.0, 0.065, 0.0)) < 0.05:
 			ch.queue_free()
-	_refresh_hud()
 
 
 func _wall_crash(cell: Vector2i) -> void:
@@ -2551,6 +2761,7 @@ func _spawn_mine(c: Vector2i) -> void:
 	mi.material_override = mat
 	mi.position = _cell_pos(c) + Vector3(0.0, 0.018, 0.0)
 	mi.name = "mine_%d_%d" % [c.x, c.y]
+	mi.set_meta("mine_owner", c)
 	gear_root.add_child(mi)
 	# 九格覆盖范围：极淡的暗红地毯
 	for dx in range(-1, 2):
@@ -2568,7 +2779,15 @@ func _spawn_mine(c: Vector2i) -> void:
 			qm.albedo_color = Color(0.55, 0.14, 0.10, 0.10)
 			q.material_override = qm
 			q.position = _cell_pos(cc) + Vector3(0.0, 0.034, 0.0)
+			q.set_meta("mine_owner", c)
 			gear_root.add_child(q)
+
+
+func _free_mine_at(c: Vector2i) -> void:
+	# 雷是「一颗盘 + 九格暗红地毯」，它们都记着自己是哪颗雷的
+	for ch in gear_root.get_children():
+		if ch is MeshInstance3D and ch.get_meta("mine_owner", Vector2i(-999, -999)) == c:
+			ch.queue_free()
 
 
 func _detonate(c: Vector2i) -> void:
@@ -2579,9 +2798,7 @@ func _detonate(c: Vector2i) -> void:
 	_play(audio_hit)
 	var hit := _cheb(c, monster_pos) <= 1
 	mine_list.erase(c)
-	for ch in gear_root.get_children():
-		if ch is MeshInstance3D and ch.position.distance_to(_cell_pos(c) + Vector3(0.0, 0.018, 0.0)) < 0.05:
-			ch.queue_free()
+	_free_mine_at(c)
 	if hit:
 		if _damage_monster():
 			human_win = true
@@ -3447,14 +3664,28 @@ func _apply_snapshot(d: Dictionary) -> void:
 	# 记号
 	for m in d.get("marks", []):
 		_mark_human_probe(Vector2i(int(m[0]), int(m[1])), int(m[2]))
-	# 工事
+	# 工事：快照是「当前状态」，不是「增量」。
+	# 只增不删的话，客机这边墙塌了、雷炸了都会一直留在原地。
+	var wall_now := {}
 	for w in d.get("walls", []):
-		var c := Vector2i(int(w[0]), int(w[1]))
+		wall_now[Vector2i(int(w[0]), int(w[1]))] = true
+	for c in obstacle_set.keys():
+		if not wall_now.has(c):
+			obstacle_set.erase(c)
+			_free_wall_at(c)
+	for c in wall_now.keys():
 		if not obstacle_set.has(c):
 			obstacle_set[c] = true
 			_spawn_wall(c)
+
+	var mine_now := {}
 	for mi in d.get("mines", []):
-		var c := Vector2i(int(mi[0]), int(mi[1]))
+		mine_now[Vector2i(int(mi[0]), int(mi[1]))] = true
+	for c in mine_list.duplicate():
+		if not mine_now.has(c):
+			mine_list.erase(c)
+			_free_mine_at(c)
+	for c in mine_now.keys():
 		if not mine_list.has(c):
 			mine_list.append(c)
 			_spawn_mine(c)
