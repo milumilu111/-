@@ -1,0 +1,5 @@
+# Windows 的 cmd.exe 只认 CRLF，也认不出 UTF-8。
+# 这两个规矩必须由仓库保证，否则别人 clone 下来双击就是坏的。
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
