@@ -71,7 +71,7 @@ func _ready() -> void:
 
 
 func _enter_rematch() -> void:
-	# 回到「选阵营」：技能和地形都要重挑，房间连接不动
+	# 双方都同意再来 → 直接回到「选技能」这一步，阵营保留（BO3 的规矩是换职业、不换边）
 	online_mode = GameConfig.is_online()
 	roles_sent = false
 	GameConfig.human_skill = 0
@@ -80,9 +80,9 @@ func _enter_rematch() -> void:
 	my_skill = 0
 	peer_skill = 0
 	guest_ready = false
-	_show_page(1)
+	_show_page(2)
 	if GameConfig.is_guest():
-		_set_status("房主想再来一局 —— 等他挑边。")
+		_set_status("房主同意再来一局 —— 挑个技能。")
 
 
 func _start_bgm() -> void:

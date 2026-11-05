@@ -93,6 +93,8 @@ var hud_end: Label
 var overlay_mat: ShaderMaterial
 var result_float_t := 0.0          # 底部那句话的浮动相位
 var nudge_t := 0.0                 # 回合交接推镜的剩余时间
+var y_voted := false               # 我这边的"再来一局"票
+var peer_y_voted := false          # 对面那张票
 
 var world_env: Environment         # 捏在手里：输的时候要把它一起压暗
 var pendant_root: Node3D
@@ -1327,11 +1329,11 @@ func _unhandled_input(event: InputEvent) -> void:
 					if setup_phase and side == 0:
 						setup_vertical = not setup_vertical
 					elif ended:
-						_rematch()
+						_quit_menu()
 				KEY_Y:
-					# 同模式再来一局：不重选阵营和技能，直接换一张图开
+					# 再来一局：联机时双方都按才算数（单方按了只挂个"同意"）
 					if ended:
-						_rematch_same()
+						_vote_y()
 				KEY_M:
 					# M 静音/恢复底噪（不想听的时候随手关掉）
 					var muted := bgm != null and bgm.volume_db > -40.0
@@ -1359,41 +1361,43 @@ func _turn_nudge() -> void:
 	nudge_t = 0.30
 
 
-func _rematch_same() -> void:
-	# 同模式再来一局：阵营、技能、比分都留着，只换一张地图重开
+func _vote_y() -> void:
+	# 再来一局需要双方都同意：单机直接走，联机先挂票
+	if y_voted:
+		return
+	y_voted = true
 	var n := _net()
-	if n != null and n.is_online():
-		n.send_msg({"t": "rematch_same"})
+	if n == null or not n.is_online():
+		_goto_rematch()
+		return
+	n.send_msg({"t": "vote_y"})
+	_say("你点了「再来」。等对面也按一下 Y。", PINK_SOFT, true)
+	if peer_y_voted:
+		_goto_rematch()
+
+
+func _goto_rematch() -> void:
+	# 双方都同意 → 回标题页的「选技能」那一步（阵营保留，职业按 BO3 规则可换不可重复）
+	var n := _net()
+	if n != null and n.is_online() and GameConfig.is_host():
+		n.send_msg({"t": "rematch_start"})
 	GameConfig.rematch = true
 	GameConfig.map_seed = 0
-	get_tree().change_scene_to_file("res://main.tscn")
+	get_tree().change_scene_to_file("res://menu.tscn")
+
+
+func _quit_menu() -> void:
+	# 任何一方按 R：两边一起退回主界面（连接断掉，要打就重新开房）
+	var n := _net()
+	if n != null and n.is_online():
+		n.send_msg({"t": "quit_menu"})
+		n.close()
+	GameConfig.reset()
+	get_tree().change_scene_to_file("res://menu.tscn")
 
 
 func _rematch() -> void:
-	# 再来一局：回「选阵营」重挑。联机时顺带通知对面，连接不断（不然还得重新输房间号）
-	# 三局两胜：整场已经分出胜负时，这次就是「新的一场」—— 比分和用过的职业清空
-	if GameConfig.is_bo3() and (GameConfig.wins_human >= 2 or GameConfig.wins_monster >= 2):
-		GameConfig.match_round = 1
-		GameConfig.wins_human = 0
-		GameConfig.wins_monster = 0
-		GameConfig.used_human = []
-		GameConfig.used_monster = []
-		GameConfig.win_marks = []
-		GameConfig.last_winner = -1
-	# 死里逃生：命还没打完就「双方各抽一个技能」继续；打完了就重开一整场
-	if GameConfig.is_escape():
-		if GameConfig.lives_left <= 0:
-			GameConfig.lives_left = 3
-			GameConfig.human_skills = []
-			GameConfig.monster_skills = []
-		else:
-			GameConfig.stack_skill(GameConfig.human_skills, randi_range(1, 4))
-			GameConfig.stack_skill(GameConfig.monster_skills, randi_range(1, 4))
-	var n := _net()
-	if n != null and n.is_online():
-		n.send_msg({"t": "rematch"})
-	GameConfig.rematch = true
-	get_tree().change_scene_to_file("res://menu.tscn")
+	_quit_menu()
 
 
 func _back_to_menu() -> void:
@@ -2699,7 +2703,7 @@ func _finish(title: String, sub: String, color: Color, reason: String = "") -> v
 	hud_result.position = Vector2(500, RESULT_Y_END)
 	hud_result.size = Vector2(600, 92)
 	hud_result.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_say(sub + "\n" + Texts.s("press_r") + "      Y 同模式直接再来", PINK_SOFT, true)
+	_say(sub + "\n" + Texts.s("press_r") + "      Y 再来一局（双方都按）", PINK_SOFT, true)
 	hud_result.modulate.a = 1.0
 	if GameConfig.is_host():
 		_broadcast()
@@ -4548,10 +4552,29 @@ func _on_peer_left() -> void:
 
 func _on_net_msg(d: Dictionary) -> void:
 	var t := String(d.get("t", ""))
-	if t == "rematch_same":
+	if t == "vote_y":
+		# 对面想再来一局 —— 还没到期就看我自己同不同意
+		peer_y_voted = true
+		if y_voted:
+			_goto_rematch()
+		elif ended:
+			_say("对面想再来一局。按 Y 同意，按 R 退出。", PINK_SOFT, true)
+		return
+	if t == "rematch_start":
+		# 两边都同意了，房主发的口令：一起回「选技能」
+		if get_tree().current_scene != self:
+			return
 		GameConfig.rematch = true
 		GameConfig.map_seed = 0
-		get_tree().change_scene_to_file("res://main.tscn")
+		get_tree().change_scene_to_file("res://menu.tscn")
+		return
+	if t == "quit_menu":
+		# 对面按了 R —— 整个退出，不断在这儿干等
+		var qn := _net()
+		if qn != null:
+			qn.close()
+		GameConfig.reset()
+		get_tree().change_scene_to_file("res://menu.tscn")
 		return
 	if t == "bo3":
 		# 房主算的比分是权威的：客机对齐局数、胜场
