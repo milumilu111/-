@@ -2608,6 +2608,23 @@ func _reveal_trails() -> void:
 			_reveal_trail_glow(mat, 0.35 + i * 0.10)
 
 
+func _kit_text() -> String:
+	# 死里逃生：把手上这一整套技能和层数拼成一行，给 HUD 用
+	var parts: Array = []
+	var seen: Array = []
+	for id in GameConfig.human_skills:
+		if seen.has(int(id)):
+			continue
+		seen.append(int(id))
+		var lv := GameConfig.skill_level(GameConfig.human_skills, int(id))
+		var nm := "布障者"
+		match int(id):
+			GameConfig.HumanSkill.SAPPER: nm = "地雷师"
+			GameConfig.HumanSkill.THROWER: nm = "投掷者"
+			GameConfig.HumanSkill.SURVIVOR: nm = "求生者"
+		parts.append(nm + ("" if lv <= 1 else " %d 层" % lv))
+	return " · ".join(parts)
+
 func _refresh_hud() -> void:
 	if GameConfig.is_host() and not _applying_snapshot:
 		_broadcast()
@@ -2635,8 +2652,8 @@ func _refresh_hud() -> void:
 			return
 		if GameConfig.is_escape():
 			# 死里逃生可能同时拿着墙和雷：墙先放，放完再放雷
-			hud_probes.text = "部署：墙 %d 组 · 雷 %d 颗（左键放置 · R 旋转 · 空格开始）" % [
-				deploy_wall_left, deploy_mine_left]
+			hud_probes.text = "部署：墙 %d 组 · 雷 %d 颗 · %s（左键放置 · R 旋转 · 空格开始）" % [
+				deploy_wall_left, deploy_mine_left, _kit_text()]
 			if deploy_wall_left > 0:
 				hud_hint.text = "先放墙 —— 它穿得过去，但墙会塌，声音你听得见。R 换横竖。"
 			else:
