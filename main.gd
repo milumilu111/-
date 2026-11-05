@@ -2698,6 +2698,8 @@ func _refresh_hud() -> void:
 		hud_hint.text = "左键探查一格（0.5 秒出结果）  ·  E 回正视角  ·  按住右键转头"
 	else:
 		hud_hint.text = "左键探查一格（0.5 秒出结果）  ·  E 俯视  ·  按住右键转头"
+	if GameConfig.is_escape() and human_skill != GameConfig.HumanSkill.THROWER:
+		hud_hint.text = _kit_text() + "  ·  " + hud_hint.text
 	if human_skill == GameConfig.HumanSkill.SURVIVOR:
 		if actions_left > 1:
 			hud_hint.text = "本回合还能查 %d 次  ·  %s" % [actions_left, hud_hint.text]
