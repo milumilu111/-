@@ -150,7 +150,10 @@ var setup_placed := 0
 var setup_vertical := false
 var path: Array = []               # 异形走过的有序路径（结算揭晓）
 var path_nodes: Array = []
-var trail_nodes: Array = []        # 输了之后点亮的那条路（发光脚印）
+var trail_nodes: Array = []
+var card_root: Node3D = null
+var life_root: Node3D = null
+var life_tokens: Array = []        # 输了之后点亮的那条路（发光脚印）
 var human_win := false
 var bo3_counted := false        # 这一局的结果是否已经记进 BO3 比分（防止重复记）
 var escape_counted := false     # 死里逃生：这一局是否已经扣过一条命
@@ -362,6 +365,8 @@ func _ready() -> void:
 	if GameConfig.is_escape():
 		_apply_escape_loadout()
 		_show_escape_kit()
+		_deal_cards()
+		_build_lives_marks()
 	path = [monster_spawn]
 
 	next_eye_at = _now() + 7.0
@@ -2460,6 +2465,7 @@ func _escape_banner(reason: String) -> String:
 	if died and not escape_counted:
 		escape_counted = true
 		GameConfig.lives_left = maxi(GameConfig.lives_left - 1, 0)
+		_refresh_lives_marks()
 	if GameConfig.lives_left <= 0:
 		return "—— 三条命打完了。人类赢了这一场。"
 	var how := "它没能进门。"
@@ -2504,6 +2510,89 @@ func _bo3_banner() -> String:
 			"人类" if GameConfig.wins_human >= 2 else "它"]
 	return head + " %s" % score
 
+
+func _build_lives_marks() -> void:
+	# 死里逃生：桌上摆三条命，每死一次熄灭一个
+	life_tokens.clear()
+	if life_root != null:
+		life_root.queue_free()
+	life_root = Node3D.new()
+	board_root.add_child(life_root)
+	var edge := board_size * CELL * 0.5 + 0.34
+	for i in 3:
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.030
+		cm.bottom_radius = 0.036
+		cm.height = 0.052
+		mi.mesh = cm
+		var mm := _room_mat(Color(0.86, 0.24, 0.28), 0.5)
+		mm.emission_enabled = true
+		mm.emission = Color(0.86, 0.24, 0.28)
+		mm.emission_energy_multiplier = 0.55
+		mi.material_override = mm
+		mi.position = Vector3(edge - 0.30 + i * 0.17, 0.045, edge - 0.30)
+		life_root.add_child(mi)
+		life_tokens.append(mi)
+	_refresh_lives_marks()
+
+
+func _refresh_lives_marks() -> void:
+	if not GameConfig.is_escape():
+		return
+	for i in life_tokens.size():
+		var alive := i < GameConfig.lives_left
+		var mi: MeshInstance3D = life_tokens[i]
+		var mm: StandardMaterial3D = mi.material_override
+		mm.emission_energy_multiplier = 0.55 if alive else 0.0
+		mm.albedo_color = Color(0.86, 0.24, 0.28) if alive else Color(0.16, 0.10, 0.10)
+
+
+func _deal_cards() -> void:
+	# 死里逃生开局：桌上摊开这一手牌（技能名 + 层数）
+	if card_root != null:
+		card_root.queue_free()
+	card_root = Node3D.new()
+	board_root.add_child(card_root)
+	var fz := board_size * CELL * 0.5 + 0.26
+	var seen: Array = []
+	for id in GameConfig.human_skills:
+		if seen.has(int(id)):
+			continue
+		seen.append(int(id))
+		var lv := GameConfig.skill_level(GameConfig.human_skills, int(id))
+		var nm := "布障者"
+		match int(id):
+			GameConfig.HumanSkill.SAPPER: nm = "地雷师"
+			GameConfig.HumanSkill.THROWER: nm = "投掷者"
+			GameConfig.HumanSkill.SURVIVOR: nm = "求生者"
+		var idx := seen.size() - 1
+		var card := MeshInstance3D.new()
+		var q := PlaneMesh.new()
+		q.size = Vector2(0.78, 0.50)
+		card.mesh = q
+		var cmat := StandardMaterial3D.new()
+		cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		cmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cmat.albedo_color = Color(0.93, 0.86, 0.74, 0.94)
+		card.material_override = cmat
+		card.position = Vector3(-0.44 + idx * 0.52, 0.045, fz - 0.10)
+		card.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+		card_root.add_child(card)
+		var lab := Label3D.new()
+		lab.text = nm + ("\n%d 层" % lv if lv > 1 else "")
+		lab.font_size = 52
+		lab.pixel_size = 0.0022
+		lab.modulate = Color(0.98, 0.94, 0.86)
+		lab.outline_size = 14
+		lab.outline_modulate = Color(0.06, 0.05, 0.05)
+		lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lab.position = Vector3(0.0, 0.0, 0.012)
+		lab.rotation_degrees = Vector3(0.0, 0.0, 0.0)
+		card.add_child(lab)
+		var t := create_tween()
+		card.scale = Vector3(0.2, 0.2, 1.0)
+		t.tween_property(card, "scale", Vector3(1, 1, 1), 0.35).set_delay(idx * 0.12)
 
 func _build_win_marks() -> void:
 	# 桌上摆棋子：人类赢的那局放在人类这一侧，异形赢的放在对面。
