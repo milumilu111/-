@@ -283,6 +283,19 @@ func _build_skill() -> void:
 	skill_btn_d.mouse_entered.connect(func(): _preview(4))
 	_preview(1)
 
+	# 三局两胜：这一整场已经用过的职业不允许再选
+	if GameConfig.is_bo3():
+		var used: Array = GameConfig.used_human if is_human else GameConfig.used_monster
+		var btns := [skill_btn_a, skill_btn_b, skill_btn_c, skill_btn_d]
+		for i in btns.size():
+			var b: Button = btns[i]
+			if used.has(i + 1):
+				b.disabled = true
+				b.text = "（已用过）"
+		_label("第 %d 局 · 比分 人类 %d : %d 异形 —— 用过的职业不能再选。" % [
+			GameConfig.match_round, GameConfig.wins_human, GameConfig.wins_monster],
+			18, Color(0.72, 0.55, 0.58), Vector2(162, 244), 1240)
+
 	_button("返 回", Vector2(162, 760), 200, 54, func(): _show_page(1))
 
 
@@ -361,7 +374,31 @@ func _build_online() -> void:
 	status_label = _label("", 21, Color(0.72, 0.68, 0.60), Vector2(162, 540), 1200)
 	code_label = _label("", 44, Color(0.94, 0.72, 0.42), Vector2(162, 600), 1200)
 
+	# 玩法：三种联机模式（经典 / 三局两胜 / 死里逃生 / 亡命追猎）
+	_label("玩法", 17, Color(0.46, 0.44, 0.40), Vector2(900, 320), 400)
+	var modes := [
+		["经 典", GameConfig.Mode.CLASSIC],
+		["三局两胜", GameConfig.Mode.BO3],
+		["死里逃生", GameConfig.Mode.ESCAPE],
+		["亡命追猎", GameConfig.Mode.HUNT],
+	]
+	for i in modes.size():
+		var m: Array = modes[i]
+		var b := _button(String(m[0]), Vector2(900, 348 + i * 52), 220, 44, func(): _set_mode(int(m[1])))
+		if GameConfig.mode == int(m[1]):
+			b.add_theme_color_override("font_color", Color(0.98, 0.62, 0.78))
 	_button("返 回", Vector2(162, 760), 200, 54, func(): _leave_online())
+
+
+func _set_mode(m: int) -> void:
+	GameConfig.mode = m
+	GameConfig.match_round = 1
+	GameConfig.wins_human = 0
+	GameConfig.wins_monster = 0
+	GameConfig.used_human = []
+	GameConfig.used_monster = []
+	GameConfig.win_marks = []
+	_show_page(3)
 
 
 func _set_status(txt: String) -> void:

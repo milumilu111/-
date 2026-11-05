@@ -138,7 +138,8 @@ var setup_vertical := false
 var path: Array = []               # 异形走过的有序路径（结算揭晓）
 var path_nodes: Array = []
 var trail_nodes: Array = []        # 输了之后点亮的那条路（发光脚印）
-var human_win := false             # 结束时是否是人类赢（赢就要把它的路画出来）
+var human_win := false
+var bo3_counted := false        # 这一局的结果是否已经记进 BO3 比分（防止重复记）             # 结束时是否是人类赢（赢就要把它的路画出来）
 
 # —— 步数走完自动结束回合 ——
 var _last_steps_seen := 0
@@ -205,6 +206,15 @@ func _ready() -> void:
 		mountain_set[m] = true
 	visited[monster_spawn] = true
 
+	# 三局两胜：把自己这一局选的职业记进「用过的」名单，下一局不能再选
+	if GameConfig.is_bo3():
+		if side == GameConfig.Side.HUMAN:
+			if not GameConfig.used_human.has(GameConfig.human_skill):
+				GameConfig.used_human.append(GameConfig.human_skill)
+		else:
+			if not GameConfig.used_monster.has(GameConfig.monster_skill):
+				GameConfig.used_monster.append(GameConfig.monster_skill)
+
 	_build_environment()
 	_build_pendant()
 	_build_room()
@@ -216,6 +226,7 @@ func _ready() -> void:
 	_build_eyes()
 	_build_gear_root()
 	_build_ghost()
+	_build_win_marks()
 
 	# 读菜单里暗选的结果
 	human_skill = GameConfig.human_skill
@@ -1197,6 +1208,15 @@ func _toggle_top_down() -> void:
 
 func _rematch() -> void:
 	# 再来一局：回「选阵营」重挑。联机时顺带通知对面，连接不断（不然还得重新输房间号）
+	# 三局两胜：整场已经分出胜负时，这次就是「新的一场」—— 比分和用过的职业清空
+	if GameConfig.is_bo3() and (GameConfig.wins_human >= 2 or GameConfig.wins_monster >= 2):
+		GameConfig.match_round = 1
+		GameConfig.wins_human = 0
+		GameConfig.wins_monster = 0
+		GameConfig.used_human = []
+		GameConfig.used_monster = []
+		GameConfig.win_marks = []
+		GameConfig.last_winner = -1
 	var n := _net()
 	if n != null and n.is_online():
 		n.send_msg({"t": "rematch"})
@@ -2021,6 +2041,69 @@ func _end_texts(reason: String) -> Array:
 	return ["", ""]
 
 
+func _bo3_banner() -> String:
+	# 三局两胜：记分、摆棋子、判断整场是否结束。房主算，客机等广播。
+	var who := 0 if human_win else 1
+	if GameConfig.is_bo3():
+		if GameConfig.is_host() and not bo3_counted:
+			bo3_counted = true
+			GameConfig.win_marks.append(who)
+			if who == 0:
+				GameConfig.wins_human += 1
+			else:
+				GameConfig.wins_monster += 1
+			GameConfig.last_winner = who
+			GameConfig.match_round += 1
+			_net_send({"t": "bo3", "who": who, "h": GameConfig.wins_human,
+				"m": GameConfig.wins_monster, "r": GameConfig.match_round})
+		elif GameConfig.is_guest() and not bo3_counted:
+			bo3_counted = true
+			GameConfig.win_marks.append(who)
+			if who == 0:
+				GameConfig.wins_human += 1
+			else:
+				GameConfig.wins_monster += 1
+	var over := GameConfig.wins_human >= 2 or GameConfig.wins_monster >= 2
+	var head := "第 %d 局 · %s拿下了这一局。" % [
+		maxi(GameConfig.match_round - 1, 1), "人类" if who == 0 else "它"]
+	var score := "比分 %d : %d" % [GameConfig.wins_human, GameConfig.wins_monster]
+	if over:
+		return head + " %s —— 整场结束：%s赢了。" % [score,
+			"人类" if GameConfig.wins_human >= 2 else "它"]
+	return head + " %s" % score
+
+
+func _build_win_marks() -> void:
+	# 桌上摆棋子：人类赢的那局放在人类这一侧，异形赢的放在对面。
+	# 一共最多 3 局，所以左右各摆三个位置，谁赢就往自己那边放一个。
+	var n := GameConfig.win_marks.size()
+	if n <= 0:
+		return
+	var mat_h := _room_mat(Color(0.62, 0.58, 0.44), 0.55)
+	var mat_m := _room_mat(Color(0.42, 0.10, 0.12), 0.55)
+	# 桌上这块没什么光，给棋子一点自发光，不然黑得看不出赢谁
+	for mm in [mat_h, mat_m]:
+		mm.emission_enabled = true
+		mm.emission = mm.albedo_color
+		mm.emission_energy_multiplier = 0.35
+	for i in n:
+		var who: int = GameConfig.win_marks[i]
+		var mi := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = 0.048
+		cm.bottom_radius = 0.056
+		cm.height = 0.028
+		mi.mesh = cm
+		mi.material_override = mat_h if who == 0 else mat_m
+		# 一排摆在桌子远端（都在画面里），按局数从左到右，颜色区分谁赢
+		var t := float(i) - float(n - 1) * 0.5
+		var edge := board_size * CELL * 0.5 + 0.26
+		var zz := -edge
+		mi.position = Vector3(t * 0.17, 0.045, zz)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
+
+
 func _finish(title: String, sub: String, color: Color, reason: String = "") -> void:
 	ended = true
 	scanning = false
@@ -2034,6 +2117,8 @@ func _finish(title: String, sub: String, color: Color, reason: String = "") -> v
 		sub = sub + "\n" + "它带的是 —— %s。" % GameConfig.monster_skill_name()
 	else:
 		sub = sub + "\n" + "他带的是 —— %s。" % GameConfig.human_skill_name()
+	if GameConfig.is_bo3():
+		sub = sub + "\n" + _bo3_banner()
 	end_title = title
 	end_sub = sub
 	hud_end.visible = true
@@ -3768,6 +3853,12 @@ func _on_peer_left() -> void:
 
 func _on_net_msg(d: Dictionary) -> void:
 	var t := String(d.get("t", ""))
+	if t == "bo3":
+		# 房主算的比分是权威的：客机对齐局数、胜场
+		GameConfig.wins_human = int(d.get("h", GameConfig.wins_human))
+		GameConfig.wins_monster = int(d.get("m", GameConfig.wins_monster))
+		GameConfig.match_round = int(d.get("r", GameConfig.match_round))
+		return
 	if t == "rematch":
 		# 对面按了「再来一局」：我也跟着回选阵营（还在这局里也要跟过去）
 		GameConfig.rematch = true

@@ -20,6 +20,7 @@ static var wins_monster: int = 0
 static var used_human: Array = []      # 人类这几局用过哪些职业
 static var used_monster: Array = []    # 异形用过哪些职业
 static var last_winner: int = -1        # -1 还没打 / 0 人类赢 / 1 异形赢
+static var win_marks: Array = []        # 每局谁赢（0 人类 / 1 异形），桌上按这个摆棋子
 
 # —— 死里逃生用的状态 ——
 static var lives_left: int = 3          # 异形还剩几条命
@@ -59,6 +60,7 @@ static func reset() -> void:
 	used_human = []
 	used_monster = []
 	last_winner = -1
+	win_marks = []
 	lives_left = 3
 	human_skills = []
 	monster_skills = []
