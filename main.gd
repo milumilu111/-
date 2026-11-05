@@ -1903,11 +1903,30 @@ func _pick_base(mp: Vector2) -> void:
 	if _is_mountain(cell):
 		_say("那儿是山 —— 换一格。")
 		return
+	var online: bool = GameConfig.is_online() and _net() != null and _net().is_online()
+	if online and _my_seat() == 1:
+		# 联机时的 B：只挑自己那一格，报给房主
+		hunt_base_b = cell
+		GameConfig.base_b = cell
+		_spawn_base_marker(cell, false)
+		base_phase = false
+		base_pick_count = 2
+		_net_send({"t": "base_b", "c": [cell.x, cell.y]})
+		_say("你的据点定了 —— 等他开局。")
+		_refresh_hud()
+		return
 	if base_pick_count == 0:
 		human_home = cell
 		GameConfig.base_a = cell
 		_spawn_base_marker(cell, true)
 		base_pick_count = 1
+		if online:
+			# 联机时的 A：挑完自己的，等对面挑他的
+			_net_send({"t": "pick_base"})
+			_say("你的据点定了。等对面挑他的。")
+			player_turn = false
+			_refresh_hud()
+			return
 		_say("你的据点定了。现在给另一个人挑一格 —— 他守那儿。")
 		hud_probes.text = "选另一个人（B）的基地 —— 点棋盘上一格"
 		return
@@ -1993,11 +2012,43 @@ func _hunt_guest_probe(cell: Vector2i) -> void:
 		await _after_human_action()
 
 
+func _hot_cells(rounds: int) -> Dictionary:
+	# 人类最近几回合查过的地方 —— 异形会绕开，不往他们刚盯过的地方撞
+	var hot := {}
+	for m in human_marks:
+		if int(m["round"]) >= round_no - rounds:
+			hot[m["cell"]] = true
+	return hot
+
+
+func _neighbor_avoiding_hot(cell: Vector2i, target: Vector2i, hot: Dictionary) -> Vector2i:
+	var best := cell
+	var best_d := 9999
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var c: Vector2i = cell + d
+		if c.x < 0 or c.y < 0 or c.x >= board_size or c.y >= board_size:
+			continue
+		if _is_mountain(c) or hot.has(c):
+			continue
+		var dd := absi(c.x - target.x) + absi(c.y - target.y)
+		if dd < best_d:
+			best_d = dd
+			best = c
+	return best
+
+
 func _hunt_round() -> void:
 	# A 查完 → B 查完 → 三只异形各走一遍（B 目前是脚本占位，走个过场）
+	var hot := _hot_cells(2)
 	for i in monsters.size():
 		var m: Dictionary = monsters[i]
+		# 分工：一只扑 A 的据点、一只扑 B 的，第三只走 A 那边但绕远路包抄
 		var target := _nearest_base(m["p"])
+		if hunt_base_b != Vector2i(-1, -1):
+			if i % 2 == 1:
+				target = hunt_base_b
+			else:
+				target = human_home
 		# 三只异形每回合各走一步（跟普通模式一样的速度）
 		var steps := 1
 		for s in steps:
@@ -2006,6 +2057,10 @@ func _hunt_round() -> void:
 			var nxt := _bfs_next(m["p"], target)
 			if nxt == m["p"]:
 				nxt = _random_free_neighbor(m["p"])
+			if hot.has(nxt):
+				var safe := _neighbor_avoiding_hot(m["p"], target, hot)
+				if safe != m["p"]:
+					nxt = safe
 			if _in_fire(nxt):
 				var alt := _neighbor_avoiding_fire(m["p"], target)
 				if alt != m["p"]:
@@ -4291,6 +4346,27 @@ func _on_net_msg(d: Dictionary) -> void:
 	if t == "snap":
 		if GameConfig.is_guest():
 			_apply_snapshot(d)
+		return
+	if t == "pick_base":
+		# 房主挑完自己的了 —— 轮到我（B）挑我的据点
+		base_phase = true
+		base_pick_count = 0
+		_say("轮到你挑据点了 —— 点棋盘上一格。")
+		_refresh_hud()
+		return
+	if t == "base_b":
+		# 客机把他的据点报回来了：接着开局
+		if GameConfig.is_hunt() and GameConfig.is_host():
+			var bc := Vector2i(int(d.get("c", [0, 0])[0]), int(d.get("c", [0, 0])[1]))
+			hunt_base_b = bc
+			GameConfig.base_b = bc
+			_spawn_base_marker(bc, false)
+			base_phase = false
+			base_pick_count = 2
+			_init_monsters()
+			_refresh_hud()
+			_after_base_pick()
+			_broadcast()
 		return
 	if t == "turn" and GameConfig.is_guest():
 		# 房主说：布防结束（或轮次换了）—— 收起本地的部署界面
