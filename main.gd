@@ -1958,6 +1958,41 @@ func _monster_at(cell: Vector2i) -> int:
 	return -1
 
 
+func _my_seat() -> int:
+	# 亡命追猎里两个座位都是人类：房主坐 A（0），客机坐 B（1）
+	return 0 if GameConfig.is_host() else 1
+
+
+func _hunt_guest_probe(cell: Vector2i) -> void:
+	# 亡命追猎里客机（B 座）的探查：判定与人类完全一样，只是由房主代跑
+	if ended or cell.x < 0 or cell.x >= board_size or cell.y < 0 or cell.y >= board_size:
+		return
+	if _is_mountain(cell):
+		return
+	scanning = true
+	var res := 0
+	var hit_idx := _monster_at(cell)
+	if hit_idx >= 0:
+		res = 2
+	elif _hunt_traced(cell):
+		res = 1
+	probes_used += 1
+	_mark_human_probe(cell, res)
+	if res >= 1:
+		_add_trace(cell)
+	_net_send({"t": "probe_result", "c": [cell.x, cell.y], "r": res})
+	if res == 2:
+		_hunt_hit(hit_idx)
+	elif res == 1:
+		_play(audio_probe)
+	else:
+		_play(audio_probe)
+	scanning = false
+	_broadcast()
+	if not ended:
+		await _after_human_action()
+
+
 func _hunt_round() -> void:
 	# A 查完 → B 查完 → 三只异形各走一遍（B 目前是脚本占位，走个过场）
 	for i in monsters.size():
@@ -1994,11 +2029,14 @@ func _hunt_round() -> void:
 		return
 	round_no += 1
 	_refresh_traces()
-	_refresh_hud()
-	player_turn = true
+	turn_side = 0
+	player_turn = (not GameConfig.is_online()) or _my_seat() == 0
 	scanning = false
 	actions_left = _survivor_cap()
 	_refresh_hud()
+	if GameConfig.is_host():
+		_net_send({"t": "turn", "who": 0})
+		_broadcast()
 	_say(Texts.s("turn_multi") % actions_left if actions_left > 1 else Texts.s("turn_you"))
 	_survivor_notice()
 
@@ -4111,6 +4149,22 @@ func _after_human_action() -> void:
 			_broadcast()
 		return
 	actions_left = 0
+	if GameConfig.is_hunt() and GameConfig.is_online() and _net() != null and _net().is_online():
+		# 亡命追猎的回合序：A 行动 → B 行动 → 三只异形各走 → 结算
+		if turn_side == 0:
+			turn_side = 1
+			player_turn = false
+			_net_send({"t": "turn", "who": 1})
+			_say("轮到他了 —— 另一个人还在查。")
+			_refresh_hud()
+			_broadcast()
+			return
+		turn_side = 2
+		player_turn = false
+		_refresh_hud()
+		_broadcast()
+		await _monster_turn()
+		return
 	if not GameConfig.is_online() or _net() == null or not _net().is_online():
 		await _monster_turn()
 		return
@@ -4247,11 +4301,11 @@ func _on_net_msg(d: Dictionary) -> void:
 			hud_result.modulate.a = 1.0
 		var who := int(d.get("who", 0))
 		turn_side = who
-		player_turn = (who == side)
+		player_turn = (who == _my_seat()) if GameConfig.is_hunt() else (who == side)
 		if player_turn:
-			_say(Texts.s("turn_you") if side == 0 else Texts.s("turn_you_monster"))
+			_say(Texts.s("turn_you") if (GameConfig.is_hunt() or side == 0) else Texts.s("turn_you_monster"))
 		else:
-			_say(Texts.s("turn_other") if side == 0 else "轮到他了。")
+			_say(Texts.s("turn_other") if (GameConfig.is_hunt() or side == 0) else "轮到他了。")
 		hud_result.modulate.a = 1.0
 		_refresh_hud()
 		return
@@ -4300,6 +4354,12 @@ func _apply_cmd(d: Dictionary) -> void:
 	match a:
 		"probe":
 			# 客机当人类时，只有轮到他、且不在部署/开局 4 步时才能查
+			# 亡命追猎：客机坐 B 座，只有 turn_side == 1 时能查
+			if GameConfig.is_hunt():
+				if setup_phase or base_phase or ended or turn_side != 1:
+					return
+				_hunt_guest_probe(c)
+				return
 			if side != 1 or setup_phase or monster_opening or ended or turn_side != 0:
 				return
 			_remote_human_probe(c)
@@ -4485,7 +4545,7 @@ func _apply_snapshot(d: Dictionary) -> void:
 		monster_pos = Vector2i(int(d["pos"][0]), int(d["pos"][1]))
 	var turn := int(d.get("turn", 0))
 	turn_side = turn
-	player_turn = (turn == side)
+	player_turn = (turn == _my_seat()) if GameConfig.is_hunt() else (turn == side)
 	# 记号
 	for m in d.get("marks", []):
 		_mark_human_probe(Vector2i(int(m[0]), int(m[1])), int(m[2]))
