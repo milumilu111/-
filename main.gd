@@ -2458,8 +2458,15 @@ func _escape_banner(reason: String) -> String:
 		GameConfig.lives_left = maxi(GameConfig.lives_left - 1, 0)
 	if GameConfig.lives_left <= 0:
 		return "—— 三条命打完了。人类赢了这一场。"
+	var how := "它没能进门。"
+	match reason:
+		"PROBE": how = "你把它按在了盘上。"
+		"MINE": how = "它踩进了你埋的地方。"
+		"NADE": how = "手雷在它脚边炸开了。"
+		"FIRE": how = "它在火里停了一回合 —— 够了。"
+		"TIMEOUT": how = "天亮了。它没能进门 —— 但也没走成。"
 	var nxt := "再来一局，双方各抽一个新技能。"
-	return "—— 它还剩 %d 条命。%s" % [GameConfig.lives_left, nxt]
+	return "—— %s 它还剩 %d 条命。%s" % [how, GameConfig.lives_left, nxt]
 
 
 func _bo3_banner() -> String:
