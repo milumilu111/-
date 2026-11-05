@@ -2691,7 +2691,7 @@ func _refresh_hud() -> void:
 		var names := {"flash": "闪光弹", "nade": "手雷", "fire": "燃烧弹"}
 		hud_hint.text = "%s握在手上 —— 点一格扔出去  ·  Esc 放下" % names[armed_throw]
 	elif human_skill == GameConfig.HumanSkill.THROWER:
-		hud_hint.text = "左键探查一格（0.5 秒）  ·  1 闪光弹 %d  2 手雷 %d  3 燃烧弹 %d  ·  E 俯视" % [int(throw_left["flash"]), int(throw_left["nade"]), int(throw_left["fire"])]
+		hud_hint.text = "左键探查一格（0.5 秒）  ·  1 闪光弹 %d  2 手雷 %d  3 燃烧弹 %d%s  ·  E 俯视" % [int(throw_left["flash"]), int(throw_left["nade"]), int(throw_left["fire"]), ("  ·  " + _kit_text()) if GameConfig.is_escape() else ""]
 	elif opening or Time.get_ticks_msec() < open_hint_hold:
 		hud_hint.text = "它先走了 4 步 —— 不计回合，你也看不见。"
 	elif top_down:
