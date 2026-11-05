@@ -40,7 +40,18 @@ const LAMP_BASE_ENERGY := 6.0
 var mountain_set := {}
 var visited := {}                  # 异形走过的所有格子（过去时信息源）
 var traces: Array = []             # {cell, round, node, mat}
-var monster_pos := monster_spawn
+var monster_pos: Vector2i:
+	# 亡命追猎有三只异形，其余模式只有一只。
+	# 这里保留 monster_pos 这个名字当「第 0 只」的别名，老代码不用改。
+	get:
+		if monsters.size() > 0:
+			return monsters[0]["p"]
+		return monster_spawn
+	set(v):
+		if monsters.size() > 0:
+			monsters[0]["p"] = v
+var monsters: Array = []          # 每只：{"p": Vector2i, "lives": int, "tr": Dictionary}
+var hunt_base_b := Vector2i(-1, -1)   # 亡命追猎里第二个人类的基地
 
 var round_no := 1
 var probes_used := 0
@@ -225,8 +236,53 @@ func _apply_mode_layout() -> void:
 	if GameConfig.is_hunt():
 		# 亡命追猎：两个人类各自的基地由玩家开局选，开局先给默认值
 		human_home = GameConfig.base_a
+		hunt_base_b = GameConfig.base_b
+		if hunt_base_b == Vector2i(-1, -1):
+			hunt_base_b = Vector2i(board_size - 1, 0)
 	else:
 		human_home = Vector2i(0, 0)
+	_init_monsters()
+
+
+func _init_monsters() -> void:
+	# 普通模式一只；亡命追猎三只，各自从地图边缘随机冒头
+	monsters.clear()
+	var count := 3 if GameConfig.is_hunt() else 1
+	for i in count:
+		var cell := _random_edge_cell(i, count) if GameConfig.is_hunt() else monster_spawn
+		monsters.append({"p": cell, "lives": 3 if GameConfig.is_hunt() else 1, "tr": {}})
+	monster_pos = monsters[0]["p"]
+
+
+func _random_edge_cell(idx: int, count: int) -> Vector2i:
+	# 从「四条边上、离两个基地都够远」的格子里挑一个；idx 用来错开，避免三只挤在一起
+	var n := board_size
+	var cand: Array = []
+	for t in n * 4:
+		var c: Vector2i
+		if t < n:
+			c = Vector2i(t, 0)
+		elif t < n * 2:
+			c = Vector2i(n - 1, t - n)
+		elif t < n * 3:
+			c = Vector2i(n - 1 - (t - n * 2), n - 1)
+		else:
+			c = Vector2i(0, n - 1 - (t - n * 3))
+		if _is_mountain(c) or c == human_home:
+			continue
+		if GameConfig.is_hunt():
+			# 至少隔 4 格，别在人家门口刷怪
+			if _cheb(c, human_home) <= 4:
+				continue
+			if hunt_base_b != Vector2i(-1, -1) and _cheb(c, hunt_base_b) <= 4:
+				continue
+		cand.append(c)
+	if cand.is_empty():
+		return Vector2i(n - 1, n - 1)
+	# 按 idx 均匀取样，再抖一点，三只不会重叠
+	var step := maxi(1, cand.size() / maxi(count, 1))
+	var pick: Vector2i = cand[(idx * step + int(fmod(float(idx) * 3.7, float(step)))) % cand.size()]
+	return pick
 
 
 func _ready() -> void:
@@ -942,6 +998,9 @@ func _build_round_hud(font: SystemFont) -> void:
 func _update_round_hud() -> void:
 	var n := clampi(round_no, 1, max_rounds)
 	hud_round_big.text = str(n)
+	# 亡命追猎没有时限：不写「/ 999」，只写「第 N 回合」
+	if hud_round_post != null:
+		hud_round_post.text = "回合" if max_rounds >= 999 else "/ %d 回合" % max_rounds
 	for i in hud_round_ticks.size():
 		var t: ColorRect = hud_round_ticks[i]
 		if i < n - 1:
@@ -1448,8 +1507,12 @@ func _do_probe(cell: Vector2i) -> void:
 
 	# 判定顺序：先当前位置，再历史痕迹（不能反）
 	var result := 0
-	if cell == monster_pos:
+	var hit_idx := _monster_at(cell)
+	if hit_idx >= 0:
 		result = 2
+	elif GameConfig.is_hunt():
+		if _hunt_traced(cell):
+			result = 1
 	elif visited.has(cell):
 		result = 1
 
@@ -1464,6 +1527,12 @@ func _do_probe(cell: Vector2i) -> void:
 	if result == 2:
 		await get_tree().create_timer(0.65).timeout
 		_play(audio_hit)
+		if GameConfig.is_hunt():
+			_hunt_hit(hit_idx)
+			if ended:
+				return
+			await _after_human_action()
+			return
 		if _damage_monster():
 			human_win = true
 			_finish(Texts.s("win_probe_title"), Texts.s("win_probe_sub"), PINK_HOT, "PROBE")
@@ -1666,6 +1735,10 @@ func _neighbor_avoiding_fire(cell: Vector2i, target: Vector2i) -> Vector2i:
 
 
 func _monster_turn() -> void:
+	# 亡命追猎：三只脚本异形各走一遍，回合收尾逻辑单独走
+	if GameConfig.is_hunt():
+		await _hunt_round()
+		return
 	# 脚本对手：基础每回合 1 步；爆发力 = 3 步 / 停一回合；强健体魄受伤后下一回合 3 步。
 	# 会放幌子：每三次爆发有一次整轮朝着远处走，让足迹拐弯、掉头，不能顺着往回推。
 	# 没有任何「一步一声」的反馈 —— 步数只能靠事后探查到的足迹反推。
@@ -1781,6 +1854,96 @@ func _monster_turn() -> void:
 	else:
 		_say(Texts.s("turn_you"))
 	_survivor_notice()
+
+
+func _nearest_base(from: Vector2i) -> Vector2i:
+	# 三只异形各自扑最近的那个基地
+	if hunt_base_b == Vector2i(-1, -1):
+		return human_home
+	var da := absi(from.x - human_home.x) + absi(from.y - human_home.y)
+	var db := absi(from.x - hunt_base_b.x) + absi(from.y - hunt_base_b.y)
+	return human_home if da <= db else hunt_base_b
+
+
+func _hunt_traced(cell: Vector2i) -> bool:
+	# 这一格有没有「还新鲜的」足迹（三只异形的合起来算）
+	for m in monsters:
+		var tr: Dictionary = m["tr"]
+		if tr.has(cell) and round_no - int(tr[cell]) <= TRACE_LIFE:
+			return true
+	return false
+
+
+func _monster_at(cell: Vector2i) -> int:
+	for i in monsters.size():
+		if monsters[i]["p"] == cell:
+			return i
+	return -1
+
+
+func _hunt_round() -> void:
+	# A 查完 → B 查完 → 三只异形各走一遍（B 目前是脚本占位，走个过场）
+	for i in monsters.size():
+		var m: Dictionary = monsters[i]
+		var target := _nearest_base(m["p"])
+		# 它们慢，但是一直在靠近：隔一回合走一步（否则人类一轮一次行动根本追不上）
+		var steps := 1 if round_no % 2 == 1 else 0
+		for s in steps:
+			if ended:
+				return
+			var nxt := _bfs_next(m["p"], target)
+			if nxt == m["p"]:
+				nxt = _random_free_neighbor(m["p"])
+			if _in_fire(nxt):
+				var alt := _neighbor_avoiding_fire(m["p"], target)
+				if alt != m["p"]:
+					nxt = alt
+			if obstacle_set.has(nxt):
+				_smash_obstacle(nxt)
+				_wall_crash(nxt)
+				await get_tree().create_timer(0.16).timeout
+			m["p"] = nxt
+			var tr: Dictionary = m["tr"]
+			tr[nxt] = round_no
+			visited[nxt] = true
+			path.append(nxt)
+			await get_tree().create_timer(0.12).timeout
+			if nxt == human_home or (hunt_base_b != Vector2i(-1, -1) and nxt == hunt_base_b):
+				_finish(Texts.s("lose_arrive_title"), Texts.s("lose_arrive_sub"),
+					Color(0.80, 0.22, 0.22), "ARRIVE")
+				return
+	await _tick_hazards()
+	if ended:
+		return
+	round_no += 1
+	_refresh_traces()
+	_refresh_hud()
+	player_turn = true
+	scanning = false
+	actions_left = _survivor_cap()
+	_refresh_hud()
+	_say(Texts.s("turn_multi") % actions_left if actions_left > 1 else Texts.s("turn_you"))
+	_survivor_notice()
+
+
+func _hunt_hit(idx: int) -> void:
+	# 查到一只：扣它一条命。还有命就退回边缘重来，并把它的足迹从场上抹掉。
+	var m: Dictionary = monsters[idx]
+	m["lives"] = int(m["lives"]) - 1
+	var tr: Dictionary = m["tr"]
+	for c in tr.keys():
+		visited.erase(c)
+	tr.clear()
+	if int(m["lives"]) <= 0:
+		monsters.remove_at(idx)
+		if monsters.is_empty():
+			human_win = true
+			_finish(Texts.s("win_probe_title"), Texts.s("win_probe_sub"), PINK_HOT, "PROBE")
+		else:
+			_say("猎到一只。还剩 %d 只。" % monsters.size())
+	else:
+		m["p"] = _random_edge_cell(idx, maxi(monsters.size(), 1))
+		_say("它被你猎到了 —— 还剩 %d 条命，退回黑暗里去了。" % int(m["lives"]))
 
 
 func _human_threat_level() -> float:
@@ -2267,6 +2430,13 @@ func _refresh_hud() -> void:
 		_broadcast()
 	_update_round_hud()
 	hud_probes.text = "已探查 %d 次  ·  剩 %d 次机会" % [probes_used, max_rounds - probes_used]
+	if GameConfig.is_hunt() and not setup_phase:
+		var alive := 0
+		var lives := 0
+		for m in monsters:
+			alive += 1
+			lives += int(m["lives"])
+		hud_probes.text = "异形还剩 %d 只 · 共 %d 条命  ·  已探查 %d 次" % [alive, lives, probes_used]
 	if setup_phase:
 		if remote_deploy:
 			# 我是异形，正在等对面人类布防 —— 这不是我的活
@@ -3839,6 +4009,14 @@ func _net_send(d: Dictionary) -> void:
 
 func _after_human_action() -> void:
 	# 人类行动（探查/引爆/投掷）结算完之后，轮到异形 —— 求生者这一回合还有余额就先不交台
+	# 亡命追猎里的求生者：每查满三次白送一次探查（不消耗回合）
+	if GameConfig.is_hunt() and _has_human(GameConfig.HumanSkill.SURVIVOR) \
+			and probes_used > 0 and probes_used % 3 == 0:
+		player_turn = true
+		scanning = false
+		_say("求生本能 —— 这一下不算数，再查一格。")
+		_refresh_hud()
+		return
 	actions_left -= 1
 	if actions_left > 0:
 		player_turn = true
