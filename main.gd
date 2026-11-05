@@ -6,11 +6,11 @@ const Texts := preload("res://texts.gd")
 # 范围：值班室 + 桌面沙盘 + 探查（0.5s 延迟）/ 三种结果 / 足迹留存与消退 / 脚本对手 / 回合推进
 # 不做：技能、联机、AI 推理、正式胜负结算（这里只有占位的三种终止态）
 
-const SIZE := 10
+var board_size := 10   # 棋盘边长（模式不同可以改）
 const CELL := 0.28
 const BOARD_TOP := 0.030          # 射线求交用的棋盘平面高度
 const TRACE_LIFE := 9             # 足迹存活 9 个「年龄」，第 10 回合消失
-const MAX_ROUNDS := 20
+var max_rounds := 20                      # 一局的回合上限（模式不同可以改）
 const SCAN_TIME := 0.5            # 探查延迟：恐惧发生在半秒里
 
 # 地形（与交接包 board.gd 一致，23 格）
@@ -22,8 +22,8 @@ var MOUNTAINS := [
 	Vector2i(9, 3), Vector2i(9, 4), Vector2i(9, 5),
 ]
 
-const HUMAN_HOME := Vector2i(0, 0)
-const MONSTER_SPAWN := Vector2i(9, 9)
+var human_home := Vector2i(0, 0)          # 人类的基地（亡命追猎里由玩家开局选）
+var monster_spawn := Vector2i(9, 9)       # 异形出生点（随棋盘大小走）
 const HEAD_START_STEPS := 4        # 开局异形白走 4 步（不计回合）
 
 # 屏幕底部那句话：粉色、会上下浮 —— 像有人在暗处贴着桌沿说话
@@ -40,7 +40,7 @@ const LAMP_BASE_ENERGY := 6.0
 var mountain_set := {}
 var visited := {}                  # 异形走过的所有格子（过去时信息源）
 var traces: Array = []             # {cell, round, node, mat}
-var monster_pos := MONSTER_SPAWN
+var monster_pos := monster_spawn
 
 var round_no := 1
 var probes_used := 0
@@ -50,6 +50,7 @@ var ended := false
 
 var camera: Camera3D
 var cam_pos := Vector3(0.0, 2.40, 2.60)
+var home_cam_y := 2.40          # 正视角的相机高度（随棋盘大小变）
 var cam_yaw := 0.0
 var cam_pitch := -38.0
 var look_target_yaw := 0.0
@@ -170,8 +171,29 @@ var _applying_snapshot := false    # 客机：正在套用快照（别回环广�
 var turn_side := 0                 # 联机：现在轮到哪一边行动（0 人类 / 1 异形）
 
 
+func _apply_mode_layout() -> void:
+	# 每个模式的棋盘尺寸 / 回合上限 / 两个关键点。必须在建任何几何体之前调用。
+	match GameConfig.mode:
+		GameConfig.Mode.ESCAPE:
+			board_size = 14
+			max_rounds = 30
+		GameConfig.Mode.HUNT:
+			board_size = 12
+			max_rounds = 999          # 亡命追猎没有时间限制
+		_:
+			board_size = 10
+			max_rounds = 20
+	monster_spawn = Vector2i(board_size - 1, board_size - 1)
+	if GameConfig.is_hunt():
+		# 亡命追猎：两个人类各自的基地由玩家开局选，开局先给默认值
+		human_home = GameConfig.base_a
+	else:
+		human_home = Vector2i(0, 0)
+
+
 func _ready() -> void:
 	randomize()
+	_apply_mode_layout()
 	# 每局地形随机：种子存在 GameConfig 里，联机时双方用同一个种子生成同一张图
 	var rng := RandomNumberGenerator.new()
 	if GameConfig.map_seed == 0:
@@ -181,7 +203,7 @@ func _ready() -> void:
 	mountain_set = {}
 	for m in MOUNTAINS:
 		mountain_set[m] = true
-	visited[MONSTER_SPAWN] = true
+	visited[monster_spawn] = true
 
 	_build_environment()
 	_build_pendant()
@@ -207,7 +229,7 @@ func _ready() -> void:
 		GameConfig.net_mode = 0
 	monster_hp = 2.0 if monster_skill == GameConfig.MonsterSkill.TOUGH else 1.0
 	leap_left = 2 if monster_skill == GameConfig.MonsterSkill.LEAP else 0
-	path = [MONSTER_SPAWN]
+	path = [monster_spawn]
 
 	next_eye_at = _now() + 7.0
 	next_ambient_at = _now() + 4.0
@@ -375,13 +397,24 @@ func _build_pendant() -> void:
 	pendant_root.add_child(bulb)
 
 
+func _front_d() -> float:
+	# 正对的那两面墙到桌子中心的距离：必须比相机更远，否则相机会被关在屋外
+	return 2.60 * pow(float(board_size) / 10.0, 1.25) + 0.60
+
+
 func _build_room() -> void:
 	var root := Node3D.new()
 	root.name = "Room"
 	add_child(root)
 
+	# 房间随棋盘放大：桌面比棋盘宽出一圈，地板再把桌子包住
+	var span := board_size * CELL
+	var floor_span := span + 6.2
+	var table_w := span + 1.10
+	var table_d := span + 0.40
+
 	var floor_mesh := BoxMesh.new()
-	floor_mesh.size = Vector3(9.0, 0.1, 9.0)
+	floor_mesh.size = Vector3(floor_span, 0.1, floor_span)
 	var floor_mat := StandardMaterial3D.new()
 	floor_mat.albedo_color = Color(0.035, 0.035, 0.04)
 	floor_mat.roughness = 1.0
@@ -392,7 +425,7 @@ func _build_room() -> void:
 	root.add_child(floor_inst)
 
 	var table_mesh := BoxMesh.new()
-	table_mesh.size = Vector3(3.9, 0.10, 3.2)
+	table_mesh.size = Vector3(table_w, 0.10, table_d)
 	var table_mat := StandardMaterial3D.new()
 	table_mat.albedo_color = Color(0.095, 0.075, 0.058)
 	table_mat.roughness = 0.82
@@ -418,11 +451,12 @@ func _build_room() -> void:
 		root.add_child(leg)
 
 	_build_walls(root)
-	_build_window(root, -2.74, 1.95)
-	_build_window(root, 2.74, -1.95)
+	var fz := _front_d()
+	_build_window(root, -fz + 0.06, 1.95)
+	_build_window(root, fz - 0.06, -1.95)
 	_build_door(root)
-	_build_clock(root, -2.72, -2.35)
-	_build_clock(root, 2.72, 2.35)
+	_build_clock(root, -fz + 0.08, -2.35)
+	_build_clock(root, fz - 0.08, 2.35)
 
 
 func _room_mat(col: Color, rough: float) -> StandardMaterial3D:
@@ -439,12 +473,18 @@ func _build_walls(root: Node3D) -> void:
 	var wall_mat := _room_mat(Color(0.055, 0.056, 0.062), 1.0)
 	var wh := 5.0
 	var yc := 1.4
+	var span := board_size * CELL
+	var kk := float(board_size) / 10.0
+	var side_w := span + 6.2
+	# 近端那面墙必须落在相机后面，否则相机会被关在屋子外面、整屏全黑
+	var front_d := _front_d()
+	var side_x := span * 0.5 + 2.80
 	var specs := [
-		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, -2.80)],   # 人类席正对
-		[Vector3(9.0, wh, 0.10), Vector3(0.0, yc, 2.80)],    # 异形席正对
-		[Vector3(0.10, wh, 9.0), Vector3(-4.20, yc, 0.0)],   # 左
-		[Vector3(0.10, wh, 9.0), Vector3(4.20, yc, 0.0)],    # 右
-		[Vector3(9.0, 0.10, 9.0), Vector3(0.0, 3.90, 0.0)],  # 顶：抬头只看到天花板，不看到缝
+		[Vector3(side_w, wh, 0.10), Vector3(0.0, yc, -front_d)],   # 人类席正对
+		[Vector3(side_w, wh, 0.10), Vector3(0.0, yc, front_d)],    # 异形席正对
+		[Vector3(0.10, wh, side_w), Vector3(-side_x, yc, 0.0)],    # 左
+		[Vector3(0.10, wh, side_w), Vector3(side_x, yc, 0.0)],     # 右
+		[Vector3(side_w, 0.10, side_w), Vector3(0.0, 3.90, 0.0)],  # 顶：抬头只看到天花板，不看到缝
 	]
 	for sp in specs:
 		var mi := MeshInstance3D.new()
@@ -545,13 +585,14 @@ func _build_window(root: Node3D, wz: float, cx: float) -> void:
 
 func _build_door(root: Node3D) -> void:
 	# 左边的门：关着。门缝下有一条很细的光 —— 走廊还亮着。
+	var door_x := -(board_size * CELL * 0.5 + 2.80) + 0.08
 	var door_mat := _room_mat(Color(0.085, 0.072, 0.060), 0.92)
 	var dm := BoxMesh.new()
 	dm.size = Vector3(0.06, 2.30, 1.00)
 	var door := MeshInstance3D.new()
 	door.mesh = dm
 	door.material_override = door_mat
-	door.position = Vector3(-4.12, 0.20, -2.10)
+	door.position = Vector3(door_x, 0.20, -2.10)
 	door.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(door)
 
@@ -566,7 +607,7 @@ func _build_door(root: Node3D) -> void:
 	gm.size = Vector3(0.03, 0.022, 0.92)
 	gap.mesh = gm
 	gap.material_override = gap_mat
-	gap.position = Vector3(-4.09, -0.94, -2.10)
+	gap.position = Vector3(door_x + 0.03, -0.94, -2.10)
 	gap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(gap)
 
@@ -577,7 +618,7 @@ func _build_door(root: Node3D) -> void:
 	km.height = 0.07
 	knob.mesh = km
 	knob.material_override = _room_mat(Color(0.32, 0.26, 0.16), 0.45)
-	knob.position = Vector3(-4.06, -0.10, -1.75)
+	knob.position = Vector3(door_x + 0.06, -0.10, -1.75)
 	knob.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(knob)
 
@@ -628,9 +669,9 @@ func _tick_clock() -> void:
 	# 20 回合 = 一夜。分针走满一圈，时针走一格。
 	if clock_minute == null or clock_hour == null:
 		return
-	var t := float(mini(round_no, MAX_ROUNDS))
-	clock_minute.rotation_degrees.z = -t * (360.0 / float(MAX_ROUNDS))
-	clock_hour.rotation_degrees.z = -t * (30.0 / float(MAX_ROUNDS))
+	var t := float(mini(round_no, max_rounds))
+	clock_minute.rotation_degrees.z = -t * (360.0 / float(max_rounds))
+	clock_hour.rotation_degrees.z = -t * (30.0 / float(max_rounds))
 
 
 func _build_board() -> void:
@@ -641,7 +682,7 @@ func _build_board() -> void:
 	# 棋盘底座
 	var plate := MeshInstance3D.new()
 	var pm := BoxMesh.new()
-	pm.size = Vector3(SIZE * CELL + 0.10, 0.03, SIZE * CELL + 0.10)
+	pm.size = Vector3(board_size * CELL + 0.10, 0.03, board_size * CELL + 0.10)
 	plate.mesh = pm
 	var pmat := StandardMaterial3D.new()
 	pmat.albedo_color = Color(0.085, 0.075, 0.062)
@@ -662,8 +703,8 @@ func _build_board() -> void:
 	mountain_mat.roughness = 0.95
 	mountain_mat.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
 
-	for y in range(SIZE):
-		for x in range(SIZE):
+	for y in range(board_size):
+		for x in range(board_size):
 			var cell := Vector2i(x, y)
 			if mountain_set.has(cell):
 				_add_box(_cell_pos(cell) + Vector3(0.0, 0.115, 0.0), Vector3(0.255, 0.22, 0.255), mountain_mat)
@@ -675,10 +716,10 @@ func _build_board() -> void:
 	var home_mat := StandardMaterial3D.new()
 	home_mat.albedo_color = Color(1.0, 0.55, 0.18)
 	home_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_add_box(_cell_pos(HUMAN_HOME) + Vector3(0.0, 0.022, 0.0), Vector3(0.22, 0.02, 0.22), home_mat)
+	_add_box(_cell_pos(human_home) + Vector3(0.0, 0.022, 0.0), Vector3(0.22, 0.02, 0.22), home_mat)
 
 	var home_light := OmniLight3D.new()
-	home_light.position = _cell_pos(HUMAN_HOME) + Vector3(0.0, 0.16, 0.0)
+	home_light.position = _cell_pos(human_home) + Vector3(0.0, 0.16, 0.0)
 	home_light.light_color = Color(1.0, 0.55, 0.22)
 	home_light.light_energy = 0.75
 	home_light.omni_range = 1.1
@@ -698,7 +739,11 @@ func _add_box(pos: Vector3, size: Vector3, mat: Material) -> MeshInstance3D:
 
 func _build_camera() -> void:
 	camera = Camera3D.new()
-	camera.fov = 52.0
+	# 棋盘变大时：往后撤、视野放大，保证整块板子都在画面里（10 格是基准）
+	var k := float(board_size) / 10.0
+	camera.fov = 52.0 + (k - 1.0) * 12.0
+	home_cam_y = 2.40 * (0.82 + 0.18 * k)
+	cam_pos = Vector3(0.0, home_cam_y, 2.60 * pow(k, 1.25))
 	camera.position = cam_pos
 	camera.rotation_degrees = Vector3(cam_pitch, cam_yaw, 0.0)
 	camera.current = true
@@ -814,15 +859,15 @@ func _build_round_hud(font: SystemFont) -> void:
 	hud_round_big.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 
 	hud_round_post = _make_label(font, 15, Color(0.62, 0.56, 0.54), Vector2(770, 12))
-	hud_round_post.text = "/ %d 回合" % MAX_ROUNDS
+	hud_round_post.text = "/ %d 回合" % max_rounds
 	hud_round_post.size = Vector2(120, 24)
 
 	hud_round_ticks.clear()
 	var tw := 12.0
 	var gap := 4.0
-	var total := MAX_ROUNDS * tw + (MAX_ROUNDS - 1) * gap
+	var total := max_rounds * tw + (max_rounds - 1) * gap
 	var x0 := 800.0 - total * 0.5
-	for i in MAX_ROUNDS:
+	for i in max_rounds:
 		var t := ColorRect.new()
 		t.position = Vector2(x0 + i * (tw + gap), 54)
 		t.size = Vector2(tw, 4)
@@ -833,7 +878,7 @@ func _build_round_hud(font: SystemFont) -> void:
 
 
 func _update_round_hud() -> void:
-	var n := clampi(round_no, 1, MAX_ROUNDS)
+	var n := clampi(round_no, 1, max_rounds)
 	hud_round_big.text = str(n)
 	for i in hud_round_ticks.size():
 		var t: ColorRect = hud_round_ticks[i]
@@ -956,11 +1001,11 @@ func _fx_sound(pitch: float, db: float) -> void:
 # ---------------------------------------------------------------- 坐标
 
 func _cell_pos(cell: Vector2i) -> Vector3:
-	return Vector3((cell.x - 4.5) * CELL, 0.0, (cell.y - 4.5) * CELL)
+	return Vector3((cell.x - (board_size - 1) * 0.5) * CELL, 0.0, (cell.y - (board_size - 1) * 0.5) * CELL)
 
 
 func _in_bounds(c: Vector2i) -> bool:
-	return c.x >= 0 and c.x < SIZE and c.y >= 0 and c.y < SIZE
+	return c.x >= 0 and c.x < board_size and c.y >= 0 and c.y < board_size
 
 
 func _is_mountain(c: Vector2i) -> bool:
@@ -973,11 +1018,11 @@ func _gen_mountains(rng: RandomNumberGenerator) -> Array:
 	# 每局长一张新地图：几条断续的山脊，不封死路，基地和出生点永远空着
 	var blocked := {}
 	var dirs := [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var target := rng.randi_range(19, 26)
+	var target := int(round(float(board_size * board_size) * rng.randf_range(0.19, 0.26)))
 	var guard := 0
 	while blocked.size() < target and guard < 600:
 		guard += 1
-		var cur := Vector2i(rng.randi_range(0, SIZE - 1), rng.randi_range(0, SIZE - 1))
+		var cur := Vector2i(rng.randi_range(0, board_size - 1), rng.randi_range(0, board_size - 1))
 		var dir: Vector2i = dirs[rng.randi_range(0, 3)]
 		var run := rng.randi_range(2, 5)
 		for i in run:
@@ -995,14 +1040,14 @@ func _gen_mountains(rng: RandomNumberGenerator) -> Array:
 		tries += 1
 		var far := []
 		for c in blocked.keys():
-			if _cheb(c, HUMAN_HOME) > 2:
+			if _cheb(c, human_home) > 2:
 				far.append(c)
 		if far.is_empty():
 			break
 		blocked.erase(far[rng.randi_range(0, far.size() - 1)])
 	# 出生点周围留两格空地，别让它一开局就被关在笼子里
 	for c in blocked.keys():
-		if _cheb(c, MONSTER_SPAWN) <= 0:
+		if _cheb(c, monster_spawn) <= 0:
 			blocked.erase(c)
 	var out := []
 	for c in blocked.keys():
@@ -1014,21 +1059,21 @@ func _gen_mountains(rng: RandomNumberGenerator) -> Array:
 func _grow_ok(c: Vector2i, blocked: Dictionary) -> bool:
 	if not _in_bounds(c) or blocked.has(c):
 		return false
-	if c == HUMAN_HOME or c == MONSTER_SPAWN:
+	if c == human_home or c == monster_spawn:
 		return false
 	# 基地紧邻的两格不封（留个门）
-	if _cheb(c, HUMAN_HOME) <= 1:
+	if _cheb(c, human_home) <= 1:
 		return false
 	return true
 
 
 func _map_connected(blocked: Dictionary) -> bool:
 	# 从异形出生点四邻 BFS，看能不能摸到人类基地
-	var q := [MONSTER_SPAWN]
-	var seen := {MONSTER_SPAWN: true}
+	var q := [monster_spawn]
+	var seen := {monster_spawn: true}
 	while not q.is_empty():
 		var c: Vector2i = q.pop_back()
-		if c == HUMAN_HOME:
+		if c == human_home:
 			return true
 		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 			var n: Vector2i = c + d
@@ -1052,8 +1097,9 @@ func _cell_at(mp: Vector2) -> Vector2i:
 	if t <= 0.0:
 		return Vector2i(-1, -1)
 	var hit := origin + normal * t
-	var fx := hit.x / CELL + 4.5
-	var fy := hit.z / CELL + 4.5
+	var centre := (board_size - 1) * 0.5
+	var fx := hit.x / CELL + centre
+	var fy := hit.z / CELL + centre
 	var cell := Vector2i(int(round(fx)), int(round(fy)))
 	if not _in_bounds(cell):
 		return Vector2i(-1, -1)
@@ -1172,11 +1218,12 @@ func _process(delta: float) -> void:
 	cam_yaw = lerpf(cam_yaw, look_target_yaw, speed)
 	cam_pitch = lerpf(cam_pitch, look_target_pitch, speed)
 	var base_yaw := 180.0 if side == 1 else 0.0
-	var seat_z := -2.60 if side == 1 else 2.60
+	var k := float(board_size) / 10.0
+	var seat_z := -2.60 * pow(k, 1.25) if side == 1 else 2.60 * pow(k, 1.25)
 	if top_down:
-		cam_pos = cam_pos.lerp(Vector3(0.0, 4.30, 0.02), speed)
+		cam_pos = cam_pos.lerp(Vector3(0.0, 4.30 * pow(k, 1.18), 0.02), speed)
 	else:
-		cam_pos = cam_pos.lerp(Vector3(0.0, 2.40, seat_z), speed)
+		cam_pos = cam_pos.lerp(Vector3(0.0, home_cam_y, seat_z), speed)
 	camera.position = cam_pos + _camera_jitter(delta)
 	camera.rotation_degrees = Vector3(cam_pitch + _breath(0.22, 0.37), base_yaw + cam_yaw + _breath(0.30, 0.23), _breath(0.34, 0.19))
 
@@ -1294,7 +1341,7 @@ func _try_probe(at: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	var cell := _cell_at(mp)
 	if cell.x < 0:
 		return
-	if cell == HUMAN_HOME or _is_blocked(cell):
+	if cell == human_home or _is_blocked(cell):
 		return
 	if GameConfig.is_guest():
 		# 客机的探查由房主判定，但手感要一样：本地也放音效、也画那圈扫描环、也等半秒
@@ -1461,7 +1508,7 @@ func _pick_far_cell() -> Vector2i:
 	for c in dist.keys():
 		if int(dist[c]) < 4:
 			continue
-		var score := absi(c.x - HUMAN_HOME.x) + absi(c.y - HUMAN_HOME.y)
+		var score := absi(c.x - human_home.x) + absi(c.y - human_home.y)
 		if score > best_score:
 			best_score = score
 			best = c
@@ -1471,18 +1518,18 @@ func _pick_far_cell() -> Vector2i:
 func _pick_decoy_cell() -> Vector2i:
 	# 幌子：在「和基地差不多远」的一圈里挑个横向错开的点 ——
 	# 足迹会拐弯、走岔、甚至回头，但整体还是在逼近，不会原地打转。
-	var ring := absi(monster_pos.x - HUMAN_HOME.x) + absi(monster_pos.y - HUMAN_HOME.y)
+	var ring := absi(monster_pos.x - human_home.x) + absi(monster_pos.y - human_home.y)
 	for i in range(80):
-		var c := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
-		if _is_mountain(c) or c == HUMAN_HOME or c == monster_pos:
+		var c := Vector2i(randi_range(0, board_size - 1), randi_range(0, board_size - 1))
+		if _is_mountain(c) or c == human_home or c == monster_pos:
 			continue
-		var cring := absi(c.x - HUMAN_HOME.x) + absi(c.y - HUMAN_HOME.y)
+		var cring := absi(c.x - human_home.x) + absi(c.y - human_home.y)
 		if cring < ring - 1 or cring > ring + 1:
 			continue
 		if absi(c.x - monster_pos.x) + absi(c.y - monster_pos.y) < 2:
 			continue
 		return c
-	return HUMAN_HOME
+	return human_home
 
 
 func _random_free_neighbor(cell: Vector2i) -> Vector2i:
@@ -1490,7 +1537,7 @@ func _random_free_neighbor(cell: Vector2i) -> Vector2i:
 	dirs.shuffle()
 	for d in dirs:
 		var nb: Vector2i = cell + d
-		if _in_bounds(nb) and not _is_mountain(nb) and nb != HUMAN_HOME:
+		if _in_bounds(nb) and not _is_mountain(nb) and nb != human_home:
 			return nb
 	return cell
 
@@ -1509,7 +1556,7 @@ func _jitter_neighbor(cell: Vector2i, target: Vector2i) -> Vector2i:
 	side.shuffle()
 	for d in side:
 		var nb: Vector2i = cell + d
-		if _in_bounds(nb) and not _is_mountain(nb) and nb != HUMAN_HOME:
+		if _in_bounds(nb) and not _is_mountain(nb) and nb != human_home:
 			return nb
 	return cell
 
@@ -1527,7 +1574,7 @@ func _neighbor_avoiding_fire(cell: Vector2i, target: Vector2i) -> Vector2i:
 	var best_d := 999
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var nb: Vector2i = cell + d
-		if not _in_bounds(nb) or _is_mountain(nb) or nb == HUMAN_HOME:
+		if not _in_bounds(nb) or _is_mountain(nb) or nb == human_home:
 			continue
 		if _in_fire(nb):
 			continue
@@ -1557,12 +1604,12 @@ func _monster_turn() -> void:
 		wounded = false
 		steps = 3
 
-	var dist := absi(monster_pos.x - HUMAN_HOME.x) + absi(monster_pos.y - HUMAN_HOME.y)
+	var dist := absi(monster_pos.x - human_home.x) + absi(monster_pos.y - human_home.y)
 	var use_decoy := false
 	# 幌子是拿来骗「会顺着脚印推」的人的。对面要是在乱摸（探查点离我很远），
 	# 放幌子纯属自己拖时间 —— 这时候一路直扑，20 回合内一定进得去。
 	var hot := _human_threat_level()
-	var endgame := round_no >= MAX_ROUNDS - 4
+	var endgame := round_no >= max_rounds - 4
 	if steps > 0 and not endgame and hot >= 0.34:
 		burst_index += 1
 		if ai_decoy_bursts > 0:
@@ -1577,7 +1624,7 @@ func _monster_turn() -> void:
 			ai_decoy = _pick_decoy_cell()
 			use_decoy = true
 
-	var target: Vector2i = HUMAN_HOME
+	var target: Vector2i = human_home
 	if use_decoy:
 		target = ai_decoy
 
@@ -1597,7 +1644,7 @@ func _monster_turn() -> void:
 				walked += 1
 				path.append(landing)
 				await get_tree().create_timer(0.13).timeout
-				if monster_pos == HUMAN_HOME:
+				if monster_pos == human_home:
 					break
 				continue
 		var nxt := _bfs_next(monster_pos, target)
@@ -1627,7 +1674,7 @@ func _monster_turn() -> void:
 		path.append(monster_pos)
 		await get_tree().create_timer(0.13).timeout
 		walked += 1
-		if monster_pos == HUMAN_HOME:
+		if monster_pos == human_home:
 			break
 
 	await _tick_hazards()
@@ -1638,10 +1685,10 @@ func _monster_turn() -> void:
 	_refresh_traces()
 	_refresh_hud()
 
-	if monster_pos == HUMAN_HOME:
+	if monster_pos == human_home:
 		_finish(Texts.s("lose_arrive_title"), Texts.s("lose_arrive_sub"), Color(0.80, 0.22, 0.22), "ARRIVE")
 		return
-	if round_no > MAX_ROUNDS:
+	if round_no > max_rounds:
 		_finish(Texts.s("win_timeout_title"), Texts.s("win_timeout_sub"), Color(0.75, 0.72, 0.60), "TIMEOUT")
 		return
 
@@ -2057,7 +2104,7 @@ func _refresh_hud() -> void:
 	if GameConfig.is_host() and not _applying_snapshot:
 		_broadcast()
 	_update_round_hud()
-	hud_probes.text = "已探查 %d 次  ·  剩 %d 次机会" % [probes_used, MAX_ROUNDS - probes_used]
+	hud_probes.text = "已探查 %d 次  ·  剩 %d 次机会" % [probes_used, max_rounds - probes_used]
 	if setup_phase:
 		if remote_deploy:
 			# 我是异形，正在等对面人类布防 —— 这不是我的活
@@ -2087,7 +2134,7 @@ func _refresh_hud() -> void:
 			hud_probes.text = "眼前还在白 —— 这一回合你动不了  ·  你 %s 血" % hp_txt
 			hud_hint.text = "空格交给他  ·  E 俯视  ·  F1 换席"
 		elif monster_steps > 0:
-			hud_probes.text = "本回合还能走 %d 步  ·  他查了 %d 次（还剩 %d 次）  ·  你 %s 血%s" % [monster_steps, probes_used, MAX_ROUNDS - probes_used, hp_txt, leap_txt]
+			hud_probes.text = "本回合还能走 %d 步  ·  他查了 %d 次（还剩 %d 次）  ·  你 %s 血%s" % [monster_steps, probes_used, max_rounds - probes_used, hp_txt, leap_txt]
 			hud_hint.text = "WASD 走一格  ·  空格结束回合  ·  E 俯视  ·  F1 换席"
 		else:
 			hud_probes.text = "这一回合你动不了 —— %s  ·  他查了 %d 次  ·  你 %s 血" % [_no_steps_reason(), probes_used, hp_txt]
@@ -2281,7 +2328,7 @@ func _leap_to(landing: Vector2i) -> void:
 		_notify("你跃过了 (%d, %d)。" % [mid.x, mid.y])
 	_refresh_hud()
 	await get_tree().create_timer(0.18).timeout
-	if landing == HUMAN_HOME:
+	if landing == human_home:
 		await get_tree().create_timer(0.30).timeout
 		_play(audio_hit)
 		var pair := _end_texts("ARRIVE")
@@ -2307,7 +2354,7 @@ func _take_step(cell: Vector2i) -> void:
 	_update_self_marker()
 	_refresh_hud()
 	await get_tree().create_timer(0.12).timeout
-	if cell == HUMAN_HOME:
+	if cell == human_home:
 		await get_tree().create_timer(0.30).timeout
 		_play(audio_hit)
 		var pair := _end_texts("ARRIVE")
@@ -2376,7 +2423,7 @@ func _end_monster_turn() -> void:
 		actions_left = _survivor_cap()
 		_refresh_hud()
 		_survivor_notice()
-		if round_no > MAX_ROUNDS:
+		if round_no > max_rounds:
 			_finish(Texts.s("m_timeout_title"), Texts.s("m_timeout_sub"), Color(0.75, 0.72, 0.60), "TIMEOUT")
 		_net_send({"t": "turn", "who": 0})
 		_broadcast()
@@ -2413,7 +2460,7 @@ func _end_monster_turn() -> void:
 		_say(Texts.s("turn_you"))
 	else:
 		_notify("他查完了。轮到你走 %d 步。" % monster_steps)
-	if round_no > MAX_ROUNDS:
+	if round_no > max_rounds:
 		_finish(Texts.s("m_timeout_title"), Texts.s("m_timeout_sub"), Color(0.75, 0.72, 0.60), "TIMEOUT")
 
 
@@ -2428,7 +2475,7 @@ func _scripted_human_probe() -> void:
 	# 兜底：实在没地方可查，随便摸一格
 	if pick.x < 0:
 		for i in range(60):
-			var c0 := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
+			var c0 := Vector2i(randi_range(0, board_size - 1), randi_range(0, board_size - 1))
 			if not _probe_ok(c0) or _already_probed(c0):
 				continue
 			pick = c0
@@ -2502,8 +2549,8 @@ func _pick_human_probe() -> Vector2i:
 	var total := float(maxi(_pf.size(), 1))
 	var best := Vector2i(-1, -1)
 	var best_score := -1e18
-	for x in range(SIZE):
-		for y in range(SIZE):
+	for x in range(board_size):
+		for y in range(board_size):
 			var c := Vector2i(x, y)
 			if not _probe_ok(c) or _already_probed(c):
 				continue
@@ -2512,7 +2559,7 @@ func _pick_human_probe() -> Vector2i:
 			# 信息量：概率 0.5 的格子「查了最有用」，概率 0 的格子查了纯浪费
 			var info := -(pg * log(pg) + (1.0 - pg) * log(1.0 - pg))
 			var score := 7.0 * hit + 1.35 * info
-			score -= 0.01 * float(absi(c.x - HUMAN_HOME.x) + absi(c.y - HUMAN_HOME.y))
+			score -= 0.01 * float(absi(c.x - human_home.x) + absi(c.y - human_home.y))
 			if score > best_score:
 				best_score = score
 				best = c
@@ -2530,7 +2577,7 @@ func _pf_init() -> void:
 	_pf.clear()
 	for i in range(PF_N):
 		var sk := _pf_rng.randi_range(1, 4)
-		var p: Vector2i = MONSTER_SPAWN
+		var p: Vector2i = monster_spawn
 		var passed := {p: round_no}
 		for k in range(HEAD_START_STEPS):
 			p = _pf_one_turn(p, sk, 0, passed)
@@ -2540,7 +2587,7 @@ func _pf_init() -> void:
 
 
 func _pf_reseed() -> void:
-	var seed_cell: Vector2i = MONSTER_SPAWN
+	var seed_cell: Vector2i = monster_spawn
 	for i in range(human_marks.size() - 1, -1, -1):
 		if int(human_marks[i]["result"]) == 1:
 			seed_cell = human_marks[i]["cell"]
@@ -2573,7 +2620,7 @@ func _pf_one_turn(from: Vector2i, sk: int, ph: int, passed: Dictionary) -> Vecto
 			var best_d := 999
 			for d in dirs:
 				var nb2: Vector2i = p + d
-				var dd := absi(nb2.x - HUMAN_HOME.x) + absi(nb2.y - HUMAN_HOME.y)
+				var dd := absi(nb2.x - human_home.x) + absi(nb2.y - human_home.y)
 				if dd < best_d:
 					best_d = dd
 					choice = d
@@ -2717,12 +2764,12 @@ func _rebuild_perm_footprints() -> void:
 	perm_fp_cells.clear()
 	for c in visited.keys():
 		_add_perm_footprint(c)
-	_add_perm_footprint(MONSTER_SPAWN)
+	_add_perm_footprint(monster_spawn)
 	_add_perm_footprint(monster_pos)
 
 
 func _probe_ok(c: Vector2i) -> bool:
-	return _in_bounds(c) and not _is_mountain(c) and c != HUMAN_HOME
+	return _in_bounds(c) and not _is_mountain(c) and c != human_home
 
 
 func _already_probed(c: Vector2i) -> bool:
@@ -2734,8 +2781,8 @@ func _already_probed(c: Vector2i) -> bool:
 
 func _guess_next(c: Vector2i) -> Vector2i:
 	# 它要去 (0,0)，所以从脚印往前推一格：先走差得多的那根轴
-	var dx := HUMAN_HOME.x - c.x
-	var dy := HUMAN_HOME.y - c.y
+	var dx := human_home.x - c.x
+	var dy := human_home.y - c.y
 	if dx != 0 and absi(dx) >= absi(dy):
 		return c + Vector2i(signi(dx), 0)
 	if dy != 0:
@@ -2943,9 +2990,9 @@ func _setup_total() -> int:
 
 
 func _setup_cell_ok(c: Vector2i) -> bool:
-	if not _in_bounds(c) or _is_mountain(c) or c == MONSTER_SPAWN:
+	if not _in_bounds(c) or _is_mountain(c) or c == monster_spawn:
 		return false
-	if _cheb(c, HUMAN_HOME) <= 2:
+	if _cheb(c, human_home) <= 2:
 		return false
 	if obstacle_set.has(c):
 		return false
@@ -2953,7 +3000,7 @@ func _setup_cell_ok(c: Vector2i) -> bool:
 
 
 func _mine_covers_home(c: Vector2i) -> bool:
-	return _cheb(c, HUMAN_HOME) <= 1
+	return _cheb(c, human_home) <= 1
 
 
 func _finish_setup() -> void:
@@ -3247,7 +3294,7 @@ func _arm_throw(kind: String) -> void:
 func _throw_cell_ok(cell: Vector2i) -> bool:
 	if ended or not _in_bounds(cell):
 		return false
-	if _is_mountain(cell) or cell == HUMAN_HOME:
+	if _is_mountain(cell) or cell == human_home:
 		return false
 	return true
 
@@ -3398,7 +3445,7 @@ func _ai_deploy() -> void:
 	if human_skill == GameConfig.HumanSkill.BUILDER:
 		for i in range(2):
 			for t in range(80):
-				var c := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
+				var c := Vector2i(randi_range(0, board_size - 1), randi_range(0, board_size - 1))
 				var vertical := randf() < 0.5
 				var two := c + (Vector2i(0, 1) if vertical else Vector2i(1, 0))
 				if _setup_cell_ok(c) and _setup_cell_ok(two):
@@ -3412,7 +3459,7 @@ func _ai_deploy() -> void:
 			return
 		for i in range(MINE_COUNT):
 			for t in range(80):
-				var c := Vector2i(randi_range(0, SIZE - 1), randi_range(0, SIZE - 1))
+				var c := Vector2i(randi_range(0, board_size - 1), randi_range(0, board_size - 1))
 				if _setup_cell_ok(c) and not _mine_covers_home(c) and not mine_list.has(c):
 					var clear := true
 					for dx in range(-1, 2):
@@ -3446,7 +3493,7 @@ func _try_detonate_at(mp: Vector2) -> bool:
 
 func _reveal_path() -> void:
 	# 结算：把它走过的整条路一格一格点亮 —— 这是给人类的「恍然大悟」
-	var prev: Vector2i = MONSTER_SPAWN
+	var prev: Vector2i = monster_spawn
 	for i in range(path.size()):
 		var c: Vector2i = path[i]
 		var cell_mi := MeshInstance3D.new()
@@ -3778,7 +3825,7 @@ func _on_net_msg(d: Dictionary) -> void:
 			player_turn = true
 			monster_steps = 0
 			_refresh_hud()
-			if round_no > MAX_ROUNDS:
+			if round_no > max_rounds:
 				_finish(Texts.s("m_timeout_title"), Texts.s("m_timeout_sub"), Color(0.75, 0.72, 0.60), "TIMEOUT")
 			_broadcast()
 		return
@@ -3871,7 +3918,7 @@ func _apply_cmd(d: Dictionary) -> void:
 			_say(Texts.s("turn_you"))
 			_refresh_hud()
 			_survivor_notice()
-			if round_no > MAX_ROUNDS:
+			if round_no > max_rounds:
 				_finish(Texts.s("m_timeout_title"), Texts.s("m_timeout_sub"), Color(0.75, 0.72, 0.60), "TIMEOUT")
 			_net_send({"t": "turn", "who": 0})
 			_broadcast()
@@ -4008,7 +4055,7 @@ func _apply_snapshot(d: Dictionary) -> void:
 			_spawn_mine(c)
 	if side == 1:
 		# 出生点本身也算「它站过的地方」—— 客机异形开局就得看见脚下这一枚
-		_add_perm_footprint(MONSTER_SPAWN)
+		_add_perm_footprint(monster_spawn)
 		for p in d.get("perm", []):
 			_add_perm_footprint(Vector2i(int(p[0]), int(p[1])))
 		_update_self_marker()
@@ -4030,9 +4077,9 @@ func _apply_snapshot(d: Dictionary) -> void:
 				if not visited.has(pc):
 					visited[pc] = true
 					path.append(pc)
-			if not visited.has(MONSTER_SPAWN):
-				visited[MONSTER_SPAWN] = true
-				path.push_front(MONSTER_SPAWN)
+			if not visited.has(monster_spawn):
+				visited[monster_spawn] = true
+				path.push_front(monster_spawn)
 		if side == 0 and bool(d.get("win", false)):
 			# 客机人类赢了：本地点亮那条红线要按房主记录的真实路径来
 			path.clear()

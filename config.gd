@@ -8,6 +8,29 @@ enum Side { HUMAN = 0, MONSTER = 1 }
 enum HumanSkill { BUILDER = 1, SAPPER = 2, THROWER = 3, SURVIVOR = 4 }
 enum MonsterSkill { TOUGH = 1, BURST = 2, LEAP = 3, PREDATOR = 4 }
 
+# 玩法模式
+enum Mode { CLASSIC = 0, BO3 = 1, ESCAPE = 2, HUNT = 3 }
+
+static var mode: int = Mode.CLASSIC
+
+# —— 三局两胜（BO3）用的对局记录（只在联机时启用）——
+static var match_round: int = 1        # 现在是第几局
+static var wins_human: int = 0
+static var wins_monster: int = 0
+static var used_human: Array = []      # 人类这几局用过哪些职业
+static var used_monster: Array = []    # 异形用过哪些职业
+static var last_winner: int = -1        # -1 还没打 / 0 人类赢 / 1 异形赢
+
+# —— 死里逃生用的状态 ——
+static var lives_left: int = 3          # 异形还剩几条命
+static var human_skills: Array = []     # 人类叠加的技能（含重复，重复＝强化）
+static var monster_skills: Array = []
+
+# —— 亡命追猎：两名人类各自的基地 ——
+static var base_a: Vector2i = Vector2i(0, 0)
+static var base_b: Vector2i = Vector2i(0, 0)
+static var my_seat: int = 0             # 亡命追猎里我是 A 还是 B
+
 static var player_side: int = Side.HUMAN
 static var human_skill: int = HumanSkill.SAPPER
 static var monster_skill: int = MonsterSkill.BURST
@@ -29,6 +52,43 @@ static func reset() -> void:
 	net_mode = 0
 	map_seed = 0
 	rematch = false
+	mode = Mode.CLASSIC
+	match_round = 1
+	wins_human = 0
+	wins_monster = 0
+	used_human = []
+	used_monster = []
+	last_winner = -1
+	lives_left = 3
+	human_skills = []
+	monster_skills = []
+	base_a = Vector2i(0, 0)
+	base_b = Vector2i(0, 0)
+	my_seat = 0
+
+
+static func is_bo3() -> bool:
+	return mode == Mode.BO3
+
+
+static func is_escape() -> bool:
+	return mode == Mode.ESCAPE
+
+
+static func is_hunt() -> bool:
+	return mode == Mode.HUNT
+
+
+static func mode_name() -> String:
+	match mode:
+		Mode.BO3:
+			return "三局两胜"
+		Mode.ESCAPE:
+			return "死里逃生"
+		Mode.HUNT:
+			return "亡命追猎"
+		_:
+			return "经典对局"
 
 
 static func is_online() -> bool:
