@@ -92,6 +92,7 @@ var result_tween: Tween
 var hud_end: Label
 var overlay_mat: ShaderMaterial
 var result_float_t := 0.0          # 底部那句话的浮动相位
+var nudge_t := 0.0                 # 回合交接推镜的剩余时间
 
 var world_env: Environment         # 捏在手里：输的时候要把它一起压暗
 var pendant_root: Node3D
@@ -1327,6 +1328,10 @@ func _unhandled_input(event: InputEvent) -> void:
 						setup_vertical = not setup_vertical
 					elif ended:
 						_rematch()
+				KEY_Y:
+					# 同模式再来一局：不重选阵营和技能，直接换一张图开
+					if ended:
+						_rematch_same()
 				KEY_M:
 					# M 静音/恢复底噪（不想听的时候随手关掉）
 					var muted := bgm != null and bgm.volume_db > -40.0
@@ -1348,6 +1353,20 @@ func _toggle_top_down() -> void:
 		look_target_pitch = -89.0
 	else:
 		look_target_pitch = -38.0
+
+
+func _turn_nudge() -> void:
+	nudge_t = 0.30
+
+
+func _rematch_same() -> void:
+	# 同模式再来一局：阵营、技能、比分都留着，只换一张地图重开
+	var n := _net()
+	if n != null and n.is_online():
+		n.send_msg({"t": "rematch_same"})
+	GameConfig.rematch = true
+	GameConfig.map_seed = 0
+	get_tree().change_scene_to_file("res://main.tscn")
 
 
 func _rematch() -> void:
@@ -1398,7 +1417,12 @@ func _process(delta: float) -> void:
 	else:
 		cam_pos = cam_pos.lerp(Vector3(0.0, home_cam_y, seat_z), speed)
 	camera.position = cam_pos + _camera_jitter(delta)
-	camera.rotation_degrees = Vector3(cam_pitch + _breath(0.22, 0.37), base_yaw + cam_yaw + _breath(0.30, 0.23), _breath(0.34, 0.19))
+	# 回合交接推镜：0.3 秒内轻轻往前压一点，像有人换了个姿势看盘
+	var nudge := 0.0
+	if nudge_t > 0.0:
+		nudge_t = maxf(0.0, nudge_t - delta)
+		nudge = -2.4 * sin(PI * (1.0 - nudge_t / 0.30))
+	camera.rotation_degrees = Vector3(cam_pitch + _breath(0.22, 0.37) + nudge, base_yaw + cam_yaw + _breath(0.30, 0.23), _breath(0.34, 0.19))
 
 	_tick_ambient(delta)
 	_tick_eyes(delta)
@@ -2045,9 +2069,18 @@ func _hot_cells(rounds: int) -> Dictionary:
 	return hot
 
 
-func _neighbor_avoiding_hot(cell: Vector2i, target: Vector2i, hot: Dictionary) -> Vector2i:
+func _cold_cells(rounds: int) -> Dictionary:
+	# 人类"早就查过、而且不会再查一遍"的格子 —— 站在这些格子上等于隐身
+	var cold := {}
+	for m in human_marks:
+		if int(m["round"]) < round_no - rounds:
+			cold[m["cell"]] = true
+	return cold
+
+
+func _neighbor_avoiding_hot(cell: Vector2i, target: Vector2i, hot: Dictionary, cold: Dictionary = {}) -> Vector2i:
 	var best := cell
-	var best_d := 9999
+	var best_score := -9999.0
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var c: Vector2i = cell + d
 		if c.x < 0 or c.y < 0 or c.x >= board_size or c.y >= board_size:
@@ -2055,8 +2088,10 @@ func _neighbor_avoiding_hot(cell: Vector2i, target: Vector2i, hot: Dictionary) -
 		if _is_mountain(c) or hot.has(c):
 			continue
 		var dd := absi(c.x - target.x) + absi(c.y - target.y)
-		if dd < best_d:
-			best_d = dd
+		# 越靠近目标越好；踩在"早已查过的格子"上额外加分（它不会再查第二遍）
+		var score := -float(dd) + (2.5 if cold.has(c) else 0.0)
+		if score > best_score:
+			best_score = score
 			best = c
 	return best
 
@@ -2064,6 +2099,7 @@ func _neighbor_avoiding_hot(cell: Vector2i, target: Vector2i, hot: Dictionary) -
 func _hunt_round() -> void:
 	# A 查完 → B 查完 → 三只异形各走一遍（B 目前是脚本占位，走个过场）
 	var hot := _hot_cells(2)
+	var cold := _cold_cells(3)
 	for i in monsters.size():
 		var m: Dictionary = monsters[i]
 		# 分工：一只扑 A 的据点、一只扑 B 的，第三只走 A 那边但绕远路包抄
@@ -2082,7 +2118,7 @@ func _hunt_round() -> void:
 			if nxt == m["p"]:
 				nxt = _random_free_neighbor(m["p"])
 			if hot.has(nxt):
-				var safe := _neighbor_avoiding_hot(m["p"], target, hot)
+				var safe := _neighbor_avoiding_hot(m["p"], target, hot, cold)
 				if safe != m["p"]:
 					nxt = safe
 			if _in_fire(nxt):
@@ -2663,7 +2699,7 @@ func _finish(title: String, sub: String, color: Color, reason: String = "") -> v
 	hud_result.position = Vector2(500, RESULT_Y_END)
 	hud_result.size = Vector2(600, 92)
 	hud_result.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	_say(sub + "\n" + Texts.s("press_r"), PINK_SOFT, true)
+	_say(sub + "\n" + Texts.s("press_r") + "      Y 同模式直接再来", PINK_SOFT, true)
 	hud_result.modulate.a = 1.0
 	if GameConfig.is_host():
 		_broadcast()
@@ -4512,6 +4548,11 @@ func _on_peer_left() -> void:
 
 func _on_net_msg(d: Dictionary) -> void:
 	var t := String(d.get("t", ""))
+	if t == "rematch_same":
+		GameConfig.rematch = true
+		GameConfig.map_seed = 0
+		get_tree().change_scene_to_file("res://main.tscn")
+		return
 	if t == "bo3":
 		# 房主算的比分是权威的：客机对齐局数、胜场
 		GameConfig.wins_human = int(d.get("h", GameConfig.wins_human))
@@ -4558,6 +4599,8 @@ func _on_net_msg(d: Dictionary) -> void:
 		var who := int(d.get("who", 0))
 		turn_side = who
 		player_turn = (who == _my_seat()) if GameConfig.is_hunt() else (who == side)
+		if GameConfig.is_hunt():
+			_turn_nudge()
 		if player_turn:
 			_say(Texts.s("turn_you") if (GameConfig.is_hunt() or side == 0) else Texts.s("turn_you_monster"))
 		else:
