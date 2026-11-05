@@ -4518,7 +4518,7 @@ func _apply_cmd(d: Dictionary) -> void:
 			var dd: Vector2i = c - monster_pos
 			if dd.x != 0 and dd.y != 0:
 				return
-			_leap_to(c)
+			await _leap_to(c)
 			_broadcast()
 		"move":
 			if side != 0:
@@ -4527,13 +4527,13 @@ func _apply_cmd(d: Dictionary) -> void:
 				return
 			if _cheb(monster_pos, c) != 1 or _is_mountain(c):
 				return
-			_take_step(c)
+			await _take_step(c)
 			_broadcast()
 		"walk":
 			# 客机点了个远处的格子：整条路由房主来走，逐步扣步数
 			if side != 0 or ended or monster_steps <= 0:
 				return
-			_walk_to(c)
+			await _walk_to(c)
 			_broadcast()
 		"end":
 			if side != 0:
