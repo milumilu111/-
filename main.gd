@@ -139,7 +139,44 @@ var path: Array = []               # 异形走过的有序路径（结算揭晓�
 var path_nodes: Array = []
 var trail_nodes: Array = []        # 输了之后点亮的那条路（发光脚印）
 var human_win := false
-var bo3_counted := false        # 这一局的结果是否已经记进 BO3 比分（防止重复记）             # 结束时是否是人类赢（赢就要把它的路画出来）
+var bo3_counted := false        # 这一局的结果是否已经记进 BO3 比分（防止重复记）
+var escape_counted := false     # 死里逃生：这一局是否已经扣过一条命
+var deploy_wall_left := 0       # 死里逃生：这局还要放几组墙
+var deploy_mine_left := 0       # 死里逃生：这局还要放几颗雷
+
+
+# 死里逃生用：人类/异形某个技能叠了几层（没这个技能就是 0）
+func _lh(id: int) -> int:
+	return GameConfig.skill_level(GameConfig.human_skills, id)
+
+
+func _lm(id: int) -> int:
+	return GameConfig.skill_level(GameConfig.monster_skills, id)
+
+
+func _has_human(id: int) -> bool:
+	# 死里逃生是「技能表」，其他模式只有一个技能
+	if GameConfig.is_escape():
+		return GameConfig.has_skill(GameConfig.human_skills, id)
+	return human_skill == id
+
+
+func _apply_escape_loadout() -> void:
+	# 死里逃生：按技能表把这一局的家当算出来（叠层＝加量）
+	deploy_wall_left = 0
+	deploy_mine_left = 0
+	var b := _lh(GameConfig.HumanSkill.BUILDER)
+	if b > 0:
+		deploy_wall_left = 1 + b
+	var s := _lh(GameConfig.HumanSkill.SAPPER)
+	if s > 0:
+		deploy_mine_left = 2 + s
+	var t := _lh(GameConfig.HumanSkill.THROWER)
+	throw_left = {
+		"flash": t if t > 0 else 0,
+		"nade": t if t > 0 else 0,
+		"fire": t if t > 0 else 0,
+	}             # 结束时是否是人类赢（赢就要把它的路画出来）
 
 # —— 步数走完自动结束回合 ——
 var _last_steps_seen := 0
@@ -231,6 +268,16 @@ func _ready() -> void:
 	# 读菜单里暗选的结果
 	human_skill = GameConfig.human_skill
 	monster_skill = GameConfig.monster_skill
+	# 死里逃生：技能是随机抽的，还可能叠层。第一次进局先各抽一个
+	if GameConfig.is_escape():
+		if GameConfig.human_skills.is_empty():
+			GameConfig.human_skills.append(randi_range(1, 4))
+		if GameConfig.monster_skills.is_empty():
+			GameConfig.monster_skills.append(randi_range(1, 4))
+		human_skill = int(GameConfig.human_skills[0])
+		monster_skill = int(GameConfig.monster_skills[0])
+		GameConfig.human_skill = human_skill
+		GameConfig.monster_skill = monster_skill
 	side = GameConfig.player_side
 	# 安全阀：配置说是联机，但其实没有活着的连接（比如上一局联机按 R 重开过）
 	# 那就当单机打，免得「等对面」等到天荒地老
@@ -238,8 +285,12 @@ func _ready() -> void:
 	var nn := _net()
 	if GameConfig.is_online() and (nn == null or nn.status == 0):
 		GameConfig.net_mode = 0
-	monster_hp = 2.0 if monster_skill == GameConfig.MonsterSkill.TOUGH else 1.0
-	leap_left = 2 if monster_skill == GameConfig.MonsterSkill.LEAP else 0
+	var tough_lv := _lm(GameConfig.MonsterSkill.TOUGH)
+	monster_hp = 1.0 + float(tough_lv)
+	var leap_lv := _lm(GameConfig.MonsterSkill.LEAP)
+	leap_left = 0 if leap_lv <= 0 else 1 + leap_lv
+	if GameConfig.is_escape():
+		_apply_escape_loadout()
 	path = [monster_spawn]
 
 	next_eye_at = _now() + 7.0
@@ -1217,6 +1268,15 @@ func _rematch() -> void:
 		GameConfig.used_monster = []
 		GameConfig.win_marks = []
 		GameConfig.last_winner = -1
+	# 死里逃生：命还没打完就「双方各抽一个技能」继续；打完了就重开一整场
+	if GameConfig.is_escape():
+		if GameConfig.lives_left <= 0:
+			GameConfig.lives_left = 3
+			GameConfig.human_skills = []
+			GameConfig.monster_skills = []
+		else:
+			GameConfig.stack_skill(GameConfig.human_skills, randi_range(1, 4))
+			GameConfig.stack_skill(GameConfig.monster_skills, randi_range(1, 4))
 	var n := _net()
 	if n != null and n.is_online():
 		n.send_msg({"t": "rematch"})
@@ -1616,7 +1676,7 @@ func _monster_turn() -> void:
 		steps = 0
 		ai_jitter = 1   # 缓过来之后先侧移一格，别沿原路送上门
 	elif monster_skill == GameConfig.MonsterSkill.BURST:
-		steps = 3 if monster_phase == 0 else 0
+		steps = 2 + _lm(GameConfig.MonsterSkill.BURST) if monster_phase == 0 else 0
 		monster_phase = 1 - monster_phase
 	elif monster_skill == GameConfig.MonsterSkill.PREDATOR:
 		steps = _predator_steps()
@@ -2041,6 +2101,21 @@ func _end_texts(reason: String) -> Array:
 	return ["", ""]
 
 
+func _escape_banner(reason: String) -> String:
+	# 死里逃生：它死一次扣一条命（超时也算死一次）；它进门就是人类直接输
+	var died := reason == "PROBE" or reason == "MINE" or reason == "NADE" \
+		or reason == "FIRE" or reason == "TIMEOUT"
+	if reason == "ARRIVE":
+		return "—— 它进了门。这一场到此为止。"
+	if died and not escape_counted:
+		escape_counted = true
+		GameConfig.lives_left = maxi(GameConfig.lives_left - 1, 0)
+	if GameConfig.lives_left <= 0:
+		return "—— 三条命打完了。人类赢了这一场。"
+	var nxt := "再来一局，双方各抽一个新技能。"
+	return "—— 它还剩 %d 条命。%s" % [GameConfig.lives_left, nxt]
+
+
 func _bo3_banner() -> String:
 	# 三局两胜：记分、摆棋子、判断整场是否结束。房主算，客机等广播。
 	var who := 0 if human_win else 1
@@ -2119,6 +2194,8 @@ func _finish(title: String, sub: String, color: Color, reason: String = "") -> v
 		sub = sub + "\n" + "他带的是 —— %s。" % GameConfig.human_skill_name()
 	if GameConfig.is_bo3():
 		sub = sub + "\n" + _bo3_banner()
+	if GameConfig.is_escape():
+		sub = sub + "\n" + _escape_banner(reason)
 	end_title = title
 	end_sub = sub
 	hud_end.visible = true
@@ -2196,7 +2273,15 @@ func _refresh_hud() -> void:
 			hud_probes.text = "他正在布防 — 你看不见他放了什么"
 			hud_hint.text = "等他布完，你走开局的 4 步  ·  E 俯视  ·  F1 换席"
 			return
-		if human_skill == GameConfig.HumanSkill.BUILDER:
+		if GameConfig.is_escape():
+			# 死里逃生可能同时拿着墙和雷：墙先放，放完再放雷
+			hud_probes.text = "部署：墙 %d 组 · 雷 %d 颗（左键放置 · R 旋转 · 空格开始）" % [
+				deploy_wall_left, deploy_mine_left]
+			if deploy_wall_left > 0:
+				hud_hint.text = "先放墙 —— 它穿得过去，但墙会塌，声音你听得见。R 换横竖。"
+			else:
+				hud_hint.text = "再放雷 —— 每颗盖九格，引爆要花掉一回合的行动。"
+		elif human_skill == GameConfig.HumanSkill.BUILDER:
 			hud_probes.text = "部署：还剩 %d 组墙（左键放置 · R 旋转 · 空格开始）" % (_setup_total() - setup_placed)
 			hud_hint.text = "墙挡不住它 —— 它穿得过去，但墙会塌，声音你听得见。别放基地附近两格内。"
 		else:
@@ -3044,7 +3129,20 @@ func _setup_click(mp: Vector2) -> void:
 func _setup_place_cell(cell: Vector2i) -> void:
 	if cell.x < 0 or ended:
 		return
-	if human_skill == GameConfig.HumanSkill.BUILDER:
+	var placing_wall := GameConfig.is_escape() and deploy_wall_left > 0
+	if placing_wall:
+		var second := cell + Vector2i(0, 1) if setup_vertical else cell + Vector2i(1, 0)
+		if not _setup_cell_ok(cell) or not _setup_cell_ok(second):
+			_notify("这里放不下 —— 不能压山、不能贴基地两格内、不能落在一起。")
+			return
+		var group := [cell, second]
+		obstacles.append(group)
+		for c in group:
+			obstacle_set[c] = true
+			_spawn_wall(c)
+		setup_vertical = not setup_vertical
+		deploy_wall_left -= 1
+	elif human_skill == GameConfig.HumanSkill.BUILDER:
 		var second := cell + Vector2i(0, 1) if setup_vertical else cell + Vector2i(1, 0)
 		if not _setup_cell_ok(cell) or not _setup_cell_ok(second):
 			_notify("这里放不下 —— 不能压山、不能贴基地两格内、不能落在一起。")
@@ -3061,6 +3159,8 @@ func _setup_place_cell(cell: Vector2i) -> void:
 			return
 		mine_list.append(cell)
 		_spawn_mine(cell)
+		if GameConfig.is_escape():
+			deploy_mine_left -= 1
 	setup_placed += 1
 	_fx_sound(1.52, -13.0)
 	_refresh_hud()
@@ -3069,6 +3169,9 @@ func _setup_place_cell(cell: Vector2i) -> void:
 
 
 func _setup_total() -> int:
+	# 死里逃生里可能同时持有布障者和地雷师，两种都要放
+	if GameConfig.is_escape():
+		return deploy_wall_left + deploy_mine_left
 	if human_skill == GameConfig.HumanSkill.BUILDER:
 		return 2
 	return MINE_COUNT
@@ -3663,7 +3766,8 @@ func _next_monster_budget() -> int:
 		stun_turns -= 1
 		return 0
 	if monster_skill == GameConfig.MonsterSkill.BURST:
-		var s := 3 if monster_phase == 0 else 0
+		# 爆发力叠层：每多一层，爆发那一回合多走一步
+		var s := 2 + _lm(GameConfig.MonsterSkill.BURST) if monster_phase == 0 else 0
 		monster_phase = 1 - monster_phase
 		return s
 	if monster_skill == GameConfig.MonsterSkill.PREDATOR:
@@ -3676,16 +3780,20 @@ func _next_monster_budget() -> int:
 
 func _predator_steps() -> int:
 	# 捕食本能：第 7 回合起每回合两步，第 15 回合起每回合三步
-	if round_no >= 15:
-		return 3
-	if round_no >= 7:
-		return 2
+	# 叠层：每多一层，门槛提前两回合、步数 +1
+	var lv := maxi(_lm(GameConfig.MonsterSkill.PREDATOR), 1)
+	var t2 := maxi(7 - 2 * (lv - 1), 3)
+	var t3 := maxi(15 - 3 * (lv - 1), 9)
+	if round_no >= t3:
+		return 2 + lv
+	if round_no >= t2:
+		return 1 + lv
 	return 1
 
 
 func _survivor_cap() -> int:
 	# 求生者：第 7 回合起每回合能连续查 2 格，第 15 回合起 3 格
-	if human_skill != GameConfig.HumanSkill.SURVIVOR:
+	if not _has_human(GameConfig.HumanSkill.SURVIVOR):
 		return 1
 	if round_no >= 15:
 		return 3
@@ -3696,7 +3804,7 @@ func _survivor_cap() -> int:
 
 func _survivor_notice() -> void:
 	# 跨过 7 / 15 回合的那一刻说一声，否则玩家根本不知道自己的技能生效了
-	if side != 0 or human_skill != GameConfig.HumanSkill.SURVIVOR:
+	if side != 0 or not _has_human(GameConfig.HumanSkill.SURVIVOR):
 		return
 	if round_no >= 15 and not survivor_t15:
 		survivor_t15 = true

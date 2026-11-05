@@ -245,6 +245,10 @@ func _set_side(s: int) -> void:
 	if online_mode and GameConfig.is_host() and not roles_sent:
 		roles_sent = true
 		_net().send_msg({"t": "roles", "side": s})
+	# 死里逃生：技能是随机抽的，不选技能，直接开
+	if GameConfig.is_escape():
+		_pick_skill(0)
+		return
 	_show_page(2)
 
 
@@ -325,6 +329,9 @@ func _preview(which: int) -> void:
 
 func _pick_skill(which: int) -> void:
 	var is_human := GameConfig.player_side == 0
+	# 死里逃生不选技能：两边都随机抽，main 里读技能表
+	if GameConfig.is_escape():
+		which = randi_range(1, 4)
 	if is_human:
 		GameConfig.human_skill = which
 	else:
@@ -535,6 +542,11 @@ func _on_net_message(data: Dictionary) -> void:
 		"start":
 			if GameConfig.is_guest():
 				GameConfig.map_seed = int(data.get("seed", 0))
+				# 死里逃生：技能表以房主为准
+				if data.has("hs"):
+					GameConfig.human_skills = Array(data["hs"])
+				if data.has("ms"):
+					GameConfig.monster_skills = Array(data["ms"])
 				get_tree().change_scene_to_file("res://main.tscn")
 		"bye":
 			if status_label != null:
@@ -567,5 +579,14 @@ func _try_start_online() -> void:
 		GameConfig.human_skill = peer_skill
 	# 地形种子由房主定，双方用同一个种子生成同一张地图
 	GameConfig.map_seed = int(randi() % 1000000000) + 1
-	_net().send_msg({"t": "start", "seed": GameConfig.map_seed})
+	# 死里逃生的技能是随机抽的，必须房主抽、随 start 一起发过去，否则两边各抽各的会不同步
+	if GameConfig.is_escape():
+		if GameConfig.human_skills.is_empty():
+			GameConfig.human_skills.append(randi_range(1, 4))
+		if GameConfig.monster_skills.is_empty():
+			GameConfig.monster_skills.append(randi_range(1, 4))
+		_net().send_msg({"t": "start", "seed": GameConfig.map_seed,
+			"hs": GameConfig.human_skills, "ms": GameConfig.monster_skills})
+	else:
+		_net().send_msg({"t": "start", "seed": GameConfig.map_seed})
 	get_tree().change_scene_to_file("res://main.tscn")

@@ -27,6 +27,23 @@ static var lives_left: int = 3          # 异形还剩几条命
 static var human_skills: Array = []     # 人类叠加的技能（含重复，重复＝强化）
 static var monster_skills: Array = []
 
+
+# 死里逃生：把一个技能塞进技能表。重复就往同一个技能上再叠一层（最多 3 层）
+static func stack_skill(list: Array, id: int, max_level: int = 3) -> String:
+	var lv := list.count(id)
+	if lv >= max_level:
+		return ""
+	list.append(id)
+	if lv == 0:
+		return "新技能"
+	return "强化"
+
+static func skill_level(list: Array, id: int) -> int:
+	return list.count(id)
+
+static func has_skill(list: Array, id: int) -> bool:
+	return list.has(id)
+
 # —— 亡命追猎：两名人类各自的基地 ——
 static var base_a: Vector2i = Vector2i(0, 0)
 static var base_b: Vector2i = Vector2i(0, 0)
