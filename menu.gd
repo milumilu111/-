@@ -411,8 +411,21 @@ func _build_online() -> void:
 		var b := _button(String(m[0]), Vector2(900, 348 + i * 52), 220, 44, func(): _set_mode(int(m[1])))
 		if GameConfig.mode == int(m[1]):
 			b.add_theme_color_override("font_color", Color(0.98, 0.62, 0.78))
+	_label(_mode_blurb(), 16, Color(0.62, 0.58, 0.52), Vector2(900, 560), 300)
 	_button("返 回", Vector2(162, 760), 200, 54, func(): _leave_online())
 
+
+
+func _mode_blurb() -> String:
+	match GameConfig.mode:
+		GameConfig.Mode.BO3:
+			return "三局两胜\n————\n每局结束换一个没用过的职业。\n先赢两局的人拿下整场。"
+		GameConfig.Mode.ESCAPE:
+			return "死里逃生\n————\n技能随机，死一次各叠一层。\n三条命打完，人类赢。"
+		GameConfig.Mode.HUNT:
+			return "亡命追猎\n————\n两个人、两个基地。\n三只它，各三条命。"
+		_:
+			return "经 典\n————\n十乘十，二十回合。\n你每回合只能查一格。"
 
 func _set_mode(m: int) -> void:
 	GameConfig.mode = m

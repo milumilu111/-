@@ -1863,6 +1863,8 @@ func _monster_turn() -> void:
 		return
 
 	round_no += 1
+	if GameConfig.is_escape():
+		_apply_escape_loadout()
 	_refresh_traces()
 	_refresh_hud()
 
@@ -2096,6 +2098,8 @@ func _hunt_round() -> void:
 	if ended:
 		return
 	round_no += 1
+	if GameConfig.is_escape():
+		_apply_escape_loadout()
 	_refresh_traces()
 	turn_side = 0
 	player_turn = (not GameConfig.is_online()) or _my_seat() == 0
@@ -2974,6 +2978,8 @@ func _end_monster_turn() -> void:
 		if ended:
 			return
 		round_no += 1
+		if GameConfig.is_escape():
+			_apply_escape_loadout()
 		turn_side = 0
 		monster_steps = 0
 		actions_left = _survivor_cap()
@@ -4484,6 +4490,8 @@ func _on_net_msg(d: Dictionary) -> void:
 			if ended:
 				return
 			round_no += 1
+			if GameConfig.is_escape():
+				_apply_escape_loadout()
 			turn_side = 0
 			player_turn = true
 			monster_steps = 0
