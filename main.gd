@@ -3472,7 +3472,14 @@ func _setup_click(mp: Vector2) -> void:
 	if cell.x < 0 or ended:
 		return
 	if GameConfig.is_guest():
-		_net_send({"t": "cmd", "a": "place", "c": [cell.x, cell.y], "v": setup_vertical})
+		# 明确告诉房主这一下是墙还是雷 —— 房主端的 human_skill 是从对面同步来的，
+		# 万一还没到就会把墙当成雷记（主机异形 + 客机布障者开局没障碍就是这个）
+		var kind := "mine"
+		if GameConfig.is_escape():
+			kind = "wall" if deploy_wall_left > 0 else "mine"
+		elif human_skill == GameConfig.HumanSkill.BUILDER:
+			kind = "wall"
+		_net_send({"t": "cmd", "a": "place", "c": [cell.x, cell.y], "v": setup_vertical, "k": kind})
 		# 本地也数着：不然客机的部署界面永远走不完
 		if human_skill == GameConfig.HumanSkill.BUILDER:
 			setup_vertical = not setup_vertical
@@ -3484,6 +3491,32 @@ func _setup_click(mp: Vector2) -> void:
 		_refresh_hud()
 		return
 	_setup_place_cell(cell)
+
+
+func _remote_place(kind: String, cell: Vector2i) -> void:
+	# 房主代放：只看对面说的「墙/雷」，不看我这边记着的 human_skill（那个可能还没同步到）
+	if cell.x < 0 or ended:
+		return
+	if kind == "wall" or (kind == "" and _has_human(GameConfig.HumanSkill.BUILDER)):
+		var second := cell + Vector2i(0, 1) if setup_vertical else cell + Vector2i(1, 0)
+		if not _setup_cell_ok(cell) or not _setup_cell_ok(second):
+			return
+		var group := [cell, second]
+		obstacles.append(group)
+		for c in group:
+			obstacle_set[c] = true
+			_spawn_wall(c)
+		setup_vertical = not setup_vertical
+	else:
+		if not _setup_cell_ok(cell) or _mine_covers_home(cell) or mine_list.has(cell):
+			return
+		mine_list.append(cell)
+		_spawn_mine(cell)
+	setup_placed += 1
+	_fx_sound(1.52, -13.0)
+	_refresh_hud()
+	if setup_placed >= _setup_total():
+		_finish_setup()
 
 
 func _setup_place_cell(cell: Vector2i) -> void:
@@ -4468,7 +4501,7 @@ func _apply_cmd(d: Dictionary) -> void:
 			if side != 1 or not setup_phase:
 				return
 			setup_vertical = bool(d.get("v", false))
-			_setup_place_cell(c)
+			_remote_place(String(d.get("k", "")), c)
 			_broadcast()
 		"throw":
 			if side != 1 or setup_phase or monster_opening or ended or turn_side != 0:
