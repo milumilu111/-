@@ -265,9 +265,10 @@ func _init_monsters() -> void:
 	# 普通模式一只；亡命追猎三只，各自从地图边缘随机冒头
 	monsters.clear()
 	var count := 3 if GameConfig.is_hunt() else 1
+	var tint := [Color(0.62, 0.12, 0.12), Color(0.42, 0.14, 0.58), Color(0.12, 0.42, 0.22)]
 	for i in count:
 		var cell := _random_edge_cell(i, count) if GameConfig.is_hunt() else monster_spawn
-		monsters.append({"p": cell, "lives": 3 if GameConfig.is_hunt() else 1, "tr": {}})
+		monsters.append({"p": cell, "lives": 3 if GameConfig.is_hunt() else 1, "tr": {}, "col": tint[i % tint.size()]})
 	monster_pos = monsters[0]["p"]
 
 
@@ -1553,7 +1554,10 @@ func _do_probe(cell: Vector2i) -> void:
 	_show_result(result)
 	_spawn_result_mark(cell, result)
 	if result >= 1:
-		_add_trace(cell)
+		if GameConfig.is_hunt():
+			_add_trace(cell, Color(_hunt_trace_color(cell), 0.72))
+		else:
+			_add_trace(cell)
 	if GameConfig.is_online():
 		human_marks.append({"cell": cell, "result": result})
 
@@ -2214,13 +2218,22 @@ func _kill_lamp() -> void:
 
 # ---------------------------------------------------------------- 足迹
 
-func _add_trace(cell: Vector2i) -> void:
+func _hunt_trace_color(cell: Vector2i) -> Color:
+	# 亡命追猎：这格是谁的脚印，就用谁的颜色 —— 你能看出「这串脚印一直是同一只」，但看不出它是哪只
+	for m in monsters:
+		var tr: Dictionary = m.get("tr", {})
+		if tr.has(cell):
+			return m.get("col", Color(0.34, 0.09, 0.08))
+	return Color(0.34, 0.09, 0.08)
+
+
+func _add_trace(cell: Vector2i, col: Color = Color(0.34, 0.09, 0.08, 0.65)) -> void:
 	var mi := MeshInstance3D.new()
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.155, 0.155)
 	mi.mesh = quad
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.34, 0.09, 0.08, 0.65)
+	mat.albedo_color = col
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.no_depth_test = false
@@ -2238,7 +2251,7 @@ func _add_trace(cell: Vector2i) -> void:
 	mi2.rotation_degrees = Vector3(-90.0, randf_range(-40.0, 40.0), 0.0)
 	board_root.add_child(mi2)
 
-	traces.append({"cell": cell, "round": round_no, "nodes": [mi, mi2], "mat": mat})
+	traces.append({"cell": cell, "round": round_no, "nodes": [mi, mi2], "mat": mat, "col": Color(col.r, col.g, col.b)})
 	_refresh_traces()
 
 
@@ -2249,7 +2262,7 @@ func _refresh_traces() -> void:
 		alpha = clampf(alpha, 0.0, 1.0)
 		alpha = pow(alpha, 1.35)
 		var mat: StandardMaterial3D = t["mat"]
-		var col := Color(0.34, 0.09, 0.08)
+		var col: Color = t.get("col", Color(0.34, 0.09, 0.08))
 		mat.albedo_color = Color(col.r, col.g, col.b, alpha * 0.72)
 		var nodes: Array = t["nodes"]
 		for n in nodes:
