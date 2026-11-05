@@ -255,6 +255,10 @@ func _set_side(s: int) -> void:
 		return
 	chosen_side = s
 	GameConfig.player_side = s
+	GameConfig.my_seat = 0
+	if GameConfig.is_hunt():
+		# 亡命追猎两边都是人类
+		GameConfig.player_side = 0
 	if online_mode and GameConfig.is_host() and not roles_sent:
 		roles_sent = true
 		_net().send_msg({"t": "roles", "side": s})
@@ -545,8 +549,14 @@ func _on_net_message(data: Dictionary) -> void:
 	match String(data.get("t", "")):
 		"roles":
 			if GameConfig.is_guest():
-				GameConfig.player_side = 1 - int(data.get("side", 0))
-				_set_status("房主选了%s。你坐另一边。" % ("人类" if int(data.get("side", 0)) == 0 else "异形"))
+				if GameConfig.is_hunt():
+					# 亡命追猎：两边都是人类，客机坐 B 座
+					GameConfig.player_side = 0
+					GameConfig.my_seat = 1
+					_set_status("房主挑好了据点。轮到你挑你的。")
+				else:
+					GameConfig.player_side = 1 - int(data.get("side", 0))
+					_set_status("房主选了%s。你坐另一边。" % ("人类" if int(data.get("side", 0)) == 0 else "异形"))
 				_show_page(2)
 		"skill":
 			peer_skill = int(data.get("s", 1))
@@ -560,6 +570,11 @@ func _on_net_message(data: Dictionary) -> void:
 					GameConfig.human_skills = Array(data["hs"])
 				if data.has("ms"):
 					GameConfig.monster_skills = Array(data["ms"])
+				# 两边各自的技能 id：BO3 的「已用过」与死里逃生的叠层都靠它
+				if data.has("hsk"):
+					GameConfig.human_skill = int(data["hsk"])
+				if data.has("msk"):
+					GameConfig.monster_skill = int(data["msk"])
 				get_tree().change_scene_to_file("res://main.tscn")
 		"bye":
 			if status_label != null:
@@ -593,13 +608,17 @@ func _try_start_online() -> void:
 	# 地形种子由房主定，双方用同一个种子生成同一张地图
 	GameConfig.map_seed = int(randi() % 1000000000) + 1
 	# 死里逃生的技能是随机抽的，必须房主抽、随 start 一起发过去，否则两边各抽各的会不同步
+	# 另外把两边各自的技能 id 一并发过去：客机本地没有 peer 的选择，缺了它 BO3 的「已用过」和
+	# 死里逃生的叠层在客机那边永远算成 0
 	if GameConfig.is_escape():
 		if GameConfig.human_skills.is_empty():
 			GameConfig.human_skills.append(randi_range(1, 4))
 		if GameConfig.monster_skills.is_empty():
 			GameConfig.monster_skills.append(randi_range(1, 4))
 		_net().send_msg({"t": "start", "seed": GameConfig.map_seed,
-			"hs": GameConfig.human_skills, "ms": GameConfig.monster_skills})
+			"hs": GameConfig.human_skills, "ms": GameConfig.monster_skills,
+			"hsk": GameConfig.human_skill, "msk": GameConfig.monster_skill})
 	else:
-		_net().send_msg({"t": "start", "seed": GameConfig.map_seed})
+		_net().send_msg({"t": "start", "seed": GameConfig.map_seed,
+			"hsk": GameConfig.human_skill, "msk": GameConfig.monster_skill})
 	get_tree().change_scene_to_file("res://main.tscn")

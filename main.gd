@@ -174,6 +174,18 @@ func _has_human(id: int) -> bool:
 	return human_skill == id
 
 
+func _show_escape_kit() -> void:
+	# 死里逃生没有选技能页，抽完得让人一眼看见自己拿到了什么
+	var names: Array = []
+	var nm_h := ["", "布障者", "地雷师", "投掷者", "求生者"]
+	for s in GameConfig.human_skills:
+		var lv := GameConfig.skill_level(GameConfig.human_skills, int(s))
+		names.append("%s%s" % [nm_h[int(s)], "" if lv <= 1 else "（%d 层）" % lv])
+	var title := "这一场你带的是 —— %s。" % "、".join(names)
+	_say(title, PINK_SOFT, true)
+	hud_hint.text = title
+
+
 func _apply_escape_loadout() -> void:
 	# 死里逃生：按技能表把这一局的家当算出来（叠层＝加量）
 	deploy_wall_left = 0
@@ -349,6 +361,7 @@ func _ready() -> void:
 	leap_left = 0 if leap_lv <= 0 else 1 + leap_lv
 	if GameConfig.is_escape():
 		_apply_escape_loadout()
+		_show_escape_kit()
 	path = [monster_spawn]
 
 	next_eye_at = _now() + 7.0
