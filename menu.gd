@@ -227,6 +227,19 @@ func _build_side() -> void:
 
 	_label("两边是同一张桌子的对面。换座位不换局面。", 17, Color(0.34, 0.33, 0.30), Vector2(162, 470), 900)
 
+	# 单机没有「扮演异形打人类脚本」了：那半边只有联机能坐
+	if not GameConfig.is_online():
+		side_btn_b.disabled = true
+		_label("（异形这一边只能联机坐 —— 单机的对手是脚本，它不会替你演。）",
+			17, Color(0.52, 0.36, 0.38), Vector2(782, 372), 560)
+
+	# 亡命追猎是两个人打三只脚本异形：两边都必须是人类
+	if GameConfig.is_hunt():
+		side_btn_b.disabled = true
+		side_btn_a.text = "人 类 · 值 班 员（亡命追猎）"
+		_label("亡命追猎：两个人各守一个据点，桌上会同时有三只。",
+			18, Color(0.60, 0.52, 0.55), Vector2(162, 500), 900)
+
 	if GameConfig.is_online() and GameConfig.is_guest():
 		# 客机不能挑边，得等房主 —— 不说明的话，两边都点不动会像卡住
 		_label("对面正在挑边 —— 他选完，你就自动进下一步。", 18, Color(0.60, 0.52, 0.55), Vector2(162, 520), 900)

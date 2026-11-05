@@ -52,6 +52,8 @@ var monster_pos: Vector2i:
 			monsters[0]["p"] = v
 var monsters: Array = []          # 每只：{"p": Vector2i, "lives": int, "tr": Dictionary}
 var hunt_base_b := Vector2i(-1, -1)   # 亡命追猎里第二个人类的基地
+var base_phase := false               # 亡命追猎开局「自己点一格当基地」阶段
+var base_pick_count := 0              # 0 还没选 / 1 我的选好了 / 2 两个人的都选好了
 
 var round_no := 1
 var probes_used := 0
@@ -397,6 +399,17 @@ func _ready() -> void:
 		_say(Texts.s("seat_opening"))
 		hud_result.modulate.a = 1.0
 		_refresh_hud()
+	if GameConfig.is_hunt():
+		# 亡命追猎：先让玩家点一格当基地，选完再进布防/开局
+		base_phase = true
+		player_turn = false
+		hud_probes.text = "选你的基地 —— 点棋盘上一格"
+		hud_hint.text = "你和另一个人各挑一格；两个据点至少隔 3 格。"
+		_say("先挑个据点。它会从那边的黑暗里摸过来。")
+		hud_result.modulate.a = 1.0
+		_refresh_hud()
+		return
+
 	elif human_skill == GameConfig.HumanSkill.BUILDER or human_skill == GameConfig.HumanSkill.SAPPER:
 		_enter_setup()
 	else:
@@ -1237,7 +1250,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			if _dismiss_eye_under_cursor(mb.position):
 				return
-			if setup_phase and side == 0:
+			if base_phase:
+				_pick_base(mb.position)
+			elif setup_phase and side == 0:
 				_setup_click(mb.position)
 			elif side == 1:
 				_monster_move_at(mb.position)
@@ -1856,8 +1871,70 @@ func _monster_turn() -> void:
 	_survivor_notice()
 
 
+func _spawn_base_marker(cell: Vector2i, is_a: bool) -> void:
+	# 亡命追猎的两处基地：桌面上两盏小灯，亮的就是你要守的地方
+	var root := Node3D.new()
+	root.position = _cell_pos(cell)
+	add_child(root)
+	var mesh := PlaneMesh.new()
+	mesh.size = Vector2(0.235, 0.235)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.55, 0.18, 0.55) if is_a else Color(0.72, 0.52, 1.0, 0.45)
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = Vector3(0, 0.035, 0)
+	root.add_child(mi)
+	var l := OmniLight3D.new()
+	l.light_color = Color(1.0, 0.58, 0.22) if is_a else Color(0.62, 0.48, 1.0)
+	l.light_energy = 0.55
+	l.omni_range = 0.85
+	l.position = Vector3(0, 0.10, 0)
+	root.add_child(l)
+
+
+func _pick_base(mp: Vector2) -> void:
+	# 亡命追猎开局：两个人各自点一格当自己的基地
+	var cell := _cell_at(mp)
+	if cell.x < 0:
+		return
+	if _is_mountain(cell):
+		_say("那儿是山 —— 换一格。")
+		return
+	if base_pick_count == 0:
+		human_home = cell
+		GameConfig.base_a = cell
+		_spawn_base_marker(cell, true)
+		base_pick_count = 1
+		_say("你的据点定了。现在给另一个人挑一格 —— 他守那儿。")
+		hud_probes.text = "选另一个人（B）的基地 —— 点棋盘上一格"
+		return
+	if _cheb(cell, human_home) <= 2:
+		_say("离你自己太近了 —— 两个据点至少隔 3 格。")
+		return
+	hunt_base_b = cell
+	GameConfig.base_b = cell
+	_spawn_base_marker(cell, false)
+	base_pick_count = 2
+	base_phase = false
+	# 基地定了，重新给三只异形发位置（不能贴着基地刷）
+	_init_monsters()
+	_refresh_hud()
+	_after_base_pick()
+
+
+func _after_base_pick() -> void:
+	_say("基地定了 —— 你在这儿，另一边在 (%d, %d)。" % [hunt_base_b.x, hunt_base_b.y])
+	if human_skill == GameConfig.HumanSkill.BUILDER or human_skill == GameConfig.HumanSkill.SAPPER:
+		_enter_setup()
+	else:
+		player_turn = true
+		_say(Texts.s("turn_you"))
+
+
 func _nearest_base(from: Vector2i) -> Vector2i:
-	# 三只异形各自扑最近的那个基地
 	if hunt_base_b == Vector2i(-1, -1):
 		return human_home
 	var da := absi(from.x - human_home.x) + absi(from.y - human_home.y)
@@ -1886,8 +1963,8 @@ func _hunt_round() -> void:
 	for i in monsters.size():
 		var m: Dictionary = monsters[i]
 		var target := _nearest_base(m["p"])
-		# 它们慢，但是一直在靠近：隔一回合走一步（否则人类一轮一次行动根本追不上）
-		var steps := 1 if round_no % 2 == 1 else 0
+		# 三只异形每回合各走一步（跟普通模式一样的速度）
+		var steps := 1
 		for s in steps:
 			if ended:
 				return
@@ -2429,6 +2506,13 @@ func _refresh_hud() -> void:
 	if GameConfig.is_host() and not _applying_snapshot:
 		_broadcast()
 	_update_round_hud()
+	if base_phase:
+		if base_pick_count == 0:
+			hud_probes.text = "选你的基地 —— 点棋盘上一格"
+		else:
+			hud_probes.text = "选另一个人（B）的基地 —— 点棋盘上一格"
+		hud_hint.text = "你和另一个人各挑一格；两个据点至少隔 3 格。"
+		return
 	hud_probes.text = "已探查 %d 次  ·  剩 %d 次机会" % [probes_used, max_rounds - probes_used]
 	if GameConfig.is_hunt() and not setup_phase:
 		var alive := 0
