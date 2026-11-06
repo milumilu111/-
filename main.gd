@@ -162,6 +162,7 @@ var bo3_counted := false        # 这一局的结果是否已经记进 BO3 比�
 var escape_counted := false     # 死里逃生：这一局是否已经扣过一条命
 var deploy_wall_left := 0       # 死里逃生：这局还要放几组墙
 var deploy_mine_left := 0       # 死里逃生：这局还要放几颗雷
+var deploy_total := 0           # 这局一共要放几下（开局算好，不放着用完就变小）
 
 
 # 死里逃生用：人类/异形某个技能叠了几层（没这个技能就是 0）
@@ -207,7 +208,8 @@ func _apply_escape_loadout() -> void:
 		"flash": t if t > 0 else 0,
 		"nade": t if t > 0 else 0,
 		"fire": t if t > 0 else 0,
-	}             # 结束时是否是人类赢（赢就要把它的路画出来）
+	}
+	deploy_total = deploy_wall_left + deploy_mine_left
 
 # —— 步数走完自动结束回合 ——
 var _last_steps_seen := 0
@@ -1838,8 +1840,9 @@ func _monster_turn() -> void:
 	elif monster_skill == GameConfig.MonsterSkill.PREDATOR:
 		steps = _predator_steps()
 	elif wounded:
+		# 强健体魄：挨了一下之后反扑 —— 基础 3 步，叠一层再加 1 步
 		wounded = false
-		steps = 3
+		steps = 3 + maxi(0, _lm(GameConfig.MonsterSkill.TOUGH) - 1)
 
 	var dist := absi(monster_pos.x - human_home.x) + absi(monster_pos.y - human_home.y)
 	var use_decoy := false
@@ -3722,7 +3725,7 @@ func _remote_place(kind: String, cell: Vector2i) -> void:
 
 
 func _setup_place_cell(cell: Vector2i) -> void:
-	if cell.x < 0 or ended:
+	if cell.x < 0 or ended or not setup_phase:
 		return
 	var placing_wall := GameConfig.is_escape() and deploy_wall_left > 0
 	if placing_wall:
@@ -3737,7 +3740,7 @@ func _setup_place_cell(cell: Vector2i) -> void:
 			_spawn_wall(c)
 		setup_vertical = not setup_vertical
 		deploy_wall_left -= 1
-	elif human_skill == GameConfig.HumanSkill.BUILDER:
+	elif not GameConfig.is_escape() and human_skill == GameConfig.HumanSkill.BUILDER:
 		var second := cell + Vector2i(0, 1) if setup_vertical else cell + Vector2i(1, 0)
 		if not _setup_cell_ok(cell) or not _setup_cell_ok(second):
 			_notify("这里放不下 —— 不能压山、不能贴基地两格内、不能落在一起。")
@@ -3765,8 +3768,10 @@ func _setup_place_cell(cell: Vector2i) -> void:
 
 func _setup_total() -> int:
 	# 死里逃生里可能同时持有布障者和地雷师，两种都要放
+	# 注意：这里必须用「开局算好的总数」，不能拿剩下的数量 —— 否则放完一个，
+	# 总数跟着变小，`setup_placed >= total` 立刻成立，另一个就再也放不了了
 	if GameConfig.is_escape():
-		return deploy_wall_left + deploy_mine_left
+		return maxi(deploy_total, deploy_wall_left + deploy_mine_left)
 	if human_skill == GameConfig.HumanSkill.BUILDER:
 		return 2
 	return MINE_COUNT
@@ -3960,7 +3965,7 @@ func _damage_monster(amount: float = 1.0) -> bool:
 	if monster_hp <= 0.001:
 		monster_hp = 0.0
 		return true
-	if monster_skill == GameConfig.MonsterSkill.TOUGH:
+	if monster_skill == GameConfig.MonsterSkill.TOUGH or _lm(GameConfig.MonsterSkill.TOUGH) > 0:
 		wounded = true
 	return false
 
@@ -4368,8 +4373,9 @@ func _next_monster_budget() -> int:
 	if monster_skill == GameConfig.MonsterSkill.PREDATOR:
 		return _predator_steps()
 	if wounded:
+		# 强健体魄：挨了一下之后反扑 —— 基础 3 步，叠一层再加 1 步
 		wounded = false
-		return 3
+		return 3 + maxi(0, _lm(GameConfig.MonsterSkill.TOUGH) - 1)
 	return 1
 
 
