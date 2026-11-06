@@ -320,14 +320,13 @@ func _ready() -> void:
 		mountain_set[m] = true
 	visited[monster_spawn] = true
 
-	# 三局两胜：把自己这一局选的职业记进「用过的」名单，下一局不能再选
+	# 三局两胜：把这一局双方的职业都记进「用过的」名单，下一局谁都不能再选
+	# （以前只记自己那一侧，于是客机的另一方技能、以及主机的异形技能都没进名单 —— 第二局能重复选）
 	if GameConfig.is_bo3():
-		if side == GameConfig.Side.HUMAN:
-			if not GameConfig.used_human.has(GameConfig.human_skill):
-				GameConfig.used_human.append(GameConfig.human_skill)
-		else:
-			if not GameConfig.used_monster.has(GameConfig.monster_skill):
-				GameConfig.used_monster.append(GameConfig.monster_skill)
+		if GameConfig.human_skill != 0 and not GameConfig.used_human.has(GameConfig.human_skill):
+			GameConfig.used_human.append(GameConfig.human_skill)
+		if GameConfig.monster_skill != 0 and not GameConfig.used_monster.has(GameConfig.monster_skill):
+			GameConfig.used_monster.append(GameConfig.monster_skill)
 
 	_build_environment()
 	_build_pendant()
@@ -3671,21 +3670,30 @@ func _remote_place(kind: String, cell: Vector2i) -> void:
 	# 房主代放：只看对面说的「墙/雷」，不看我这边记着的 human_skill（那个可能还没同步到）
 	if cell.x < 0 or ended:
 		return
+	var placed_ok := false
 	if kind == "wall" or (kind == "" and _has_human(GameConfig.HumanSkill.BUILDER)):
-		var second := cell + Vector2i(0, 1) if setup_vertical else cell + Vector2i(1, 0)
-		if not _setup_cell_ok(cell) or not _setup_cell_ok(second):
-			return
-		var group := [cell, second]
-		obstacles.append(group)
-		for c in group:
-			obstacle_set[c] = true
-			_spawn_wall(c)
-		setup_vertical = not setup_vertical
+		# 横竖按对面说的来；那个方向放不下就换个方向再试一次，别一声不响地吞掉
+		for attempt in 2:
+			var vert := setup_vertical if attempt == 0 else not setup_vertical
+			var second: Vector2i = cell + (Vector2i(0, 1) if vert else Vector2i(1, 0))
+			if _setup_cell_ok(cell) and _setup_cell_ok(second):
+				var group := [cell, second]
+				obstacles.append(group)
+				for c in group:
+					obstacle_set[c] = true
+					_spawn_wall(c)
+				setup_vertical = not vert
+				placed_ok = true
+				break
 	else:
-		if not _setup_cell_ok(cell) or _mine_covers_home(cell) or mine_list.has(cell):
-			return
-		mine_list.append(cell)
-		_spawn_mine(cell)
+		if _setup_cell_ok(cell) and not _mine_covers_home(cell) and not mine_list.has(cell):
+			mine_list.append(cell)
+			_spawn_mine(cell)
+			placed_ok = true
+	if not placed_ok:
+		# 放不下：告诉对面一声，他那边把刚才乐观记上的那一下退回去
+		_net_send({"t": "place_fail"})
+		return
 	setup_placed += 1
 	_fx_sound(1.52, -13.0)
 	_refresh_hud()
@@ -4552,6 +4560,12 @@ func _on_peer_left() -> void:
 
 func _on_net_msg(d: Dictionary) -> void:
 	var t := String(d.get("t", ""))
+	if t == "place_fail":
+		# 房主说那一下放不下：把本地乐观记上的那一次退回去，别让部署界面提前走完
+		setup_placed = maxi(0, setup_placed - 1)
+		_say("这一格放不下 —— 换一格试试。", PINK_SOFT, true)
+		_refresh_hud()
+		return
 	if t == "vote_y":
 		# 对面想再来一局 —— 还没到期就看我自己同不同意
 		peer_y_voted = true
