@@ -386,9 +386,17 @@ func _ready() -> void:
 			n.peer_left.connect(_on_peer_left)
 
 	if GameConfig.is_guest():
-		# 客机：不跑规则，等房主的快照
-		_apply_seat_visuals() if side == GameConfig.Side.MONSTER else null
-		if human_skill == GameConfig.HumanSkill.THROWER and side == GameConfig.Side.HUMAN:
+		# 客机：不跑规则，等房主的快照。但「自己要布防」这一步是本地的 ——
+		# 以前这里是直接 return，于是客机当人类时压根进不了部署阶段（没有提示、没有虚影、点了没反应）
+		if side == GameConfig.Side.MONSTER:
+			_apply_seat_visuals()
+			_say(Texts.s("guest_wait"))
+			hud_result.modulate.a = 1.0
+			return
+		if human_skill == GameConfig.HumanSkill.BUILDER or human_skill == GameConfig.HumanSkill.SAPPER:
+			_enter_setup()
+			return
+		if human_skill == GameConfig.HumanSkill.THROWER:
 			# 投掷者没有布防 —— 直接告诉房主「我不用布，开局吧」
 			await get_tree().create_timer(0.4).timeout
 			_net_send({"t": "cmd", "a": "deploy_done"})
