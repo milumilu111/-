@@ -71,7 +71,24 @@ func _ready() -> void:
 
 
 func _enter_rematch() -> void:
-	# 双方都同意再来 → 直接回到「选技能」这一步，阵营保留（BO3 的规矩是换职业、不换边）
+	# 双方都同意再来 → 下一局。
+	# 死里逃生：技能是随机抽+叠层的，没有「选」这一步 —— 直接开
+	if GameConfig.is_escape():
+		online_mode = GameConfig.is_online()
+		roles_sent = false
+		GameConfig.map_seed = 0
+		my_skill = 1
+		peer_skill = 1
+		guest_ready = true
+		if online_mode:
+			if GameConfig.is_host():
+				_try_start_online()
+			else:
+				_set_status("房主抽好了 —— 等他开局。")
+		else:
+			get_tree().change_scene_to_file("res://main.tscn")
+		return
+	# 其余模式回到「选技能」这一步，阵营保留（BO3 的规矩是换职业、不换边）
 	online_mode = GameConfig.is_online()
 	roles_sent = false
 	GameConfig.human_skill = 0

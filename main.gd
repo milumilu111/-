@@ -1384,10 +1384,22 @@ func _vote_y() -> void:
 
 
 func _goto_rematch() -> void:
-	# 双方都同意 → 回标题页的「选技能」那一步（阵营保留，职业按 BO3 规则可换不可重复）
+	# 双方都同意 → 下一局。BO3 回「选技能」那一步；死里逃生不进那个页面，直接各抽一个（能叠就叠）
 	var n := _net()
-	if n != null and n.is_online() and GameConfig.is_host():
-		n.send_msg({"t": "rematch_start"})
+	var online: bool = n != null and n.is_online()
+	if GameConfig.is_escape():
+		# 房主（或单机）负责抽这一手，客机照抄 —— 两边各自随机必然不同步
+		if not (online and GameConfig.is_guest()):
+			if GameConfig.lives_left <= 0:
+				GameConfig.lives_left = 3
+				GameConfig.human_skills = []
+				GameConfig.monster_skills = []
+			else:
+				GameConfig.stack_skill(GameConfig.human_skills, randi_range(1, 4))
+				GameConfig.stack_skill(GameConfig.monster_skills, randi_range(1, 4))
+		if online and GameConfig.is_host():
+			n.send_msg({"t": "rematch_start",
+				"hs": GameConfig.human_skills, "ms": GameConfig.monster_skills})
 	GameConfig.rematch = true
 	GameConfig.map_seed = 0
 	get_tree().change_scene_to_file("res://menu.tscn")
@@ -4586,6 +4598,10 @@ func _on_net_msg(d: Dictionary) -> void:
 		# 两边都同意了，房主发的口令：一起回「选技能」
 		if get_tree().current_scene != self:
 			return
+		if d.has("hs"):
+			GameConfig.human_skills = Array(d["hs"])
+		if d.has("ms"):
+			GameConfig.monster_skills = Array(d["ms"])
 		GameConfig.rematch = true
 		GameConfig.map_seed = 0
 		get_tree().change_scene_to_file("res://menu.tscn")
